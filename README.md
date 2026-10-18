@@ -99,11 +99,11 @@ MIT
 
 ---
 
-## 吉祥物 / Mascot
+## 
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/mascot-hungry.png" width="180" alt="吉祥物：我是吃白饭的大肥鱼" />
   <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/mascot-punch.png" width="180" alt="吉祥物：杀鲸霸拳" />
 </p>
 
-> 仅供图一乐，与插件功能无关。/ Just for fun; not related to the plugin itself.
+> 仅供图一乐，感谢表情包创作者与插件功能无关。
