@@ -27,7 +27,8 @@ DSH 本体没有内置的插件商店；社区市场（dshmarket）的插件列�
    不发 npm 也可以；此时建议在 GitHub Release 上传预构建 `.tgz` 并用条目里的
    `tarball:` 字段指向它（必须是 GitHub Release 托管的 https `.tgz`）。
 7. （可选，推荐）在仓库 `package.json` 旁放 `screenshots.json`，列 1–8 张仓库内图片路径，
-   市场详情页会像 App Store 一样展示。
+   市场详情页会像 App Store 一样展示。**注意：截图会公开，不要用包含真实工作内容、人名、
+   项目名的界面截图**——需要时先用演示数据（如「示例项目 A」「日常习惯」）另拍，或干脆不放。
 
 ## 具体步骤
 
@@ -44,7 +45,7 @@ DSH 本体没有内置的插件商店；社区市场（dshmarket）的插件列�
 3. 点 **Create repository**。
 4. 在跳转后的空仓库页面点 **uploading an existing file** 链接。
 5. 打开本机文件夹 `publish/dsh-task-board`，**全选里面的内容**（`Ctrl+A`），拖进浏览器上传区
-   （Chrome / Edge 支持拖入文件夹并保留子目录；`assets`、`locale` 两个子文件夹要一起拖进去）。
+   （Chrome / Edge 支持拖入文件夹并保留子目录；`locale`、`assets` 两个子文件夹要一起拖进去）。
 6. 底部 **Commit changes**。
 7. 回到仓库首页 → 右上 **About** 旁的齿轮 → **Topics** 输入 `dsh-plugin` → 保存。
 
@@ -186,7 +187,7 @@ Adds `dsh-task-board`, a personal task board for the DSH Web GUI:
 - [x] real, working code (no build step, no dependencies)
 - [x] repo has the `dsh-plugin` topic
 - [x] description matches the implementation
-- [x] `screenshots.json` with 3 screenshots
+- [x] screenshots.json with 4 screenshots, task names redacted
 - [x] npm package published with `repository` pointing back to this repo
 ```
 

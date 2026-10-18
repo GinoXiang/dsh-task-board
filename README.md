@@ -2,6 +2,17 @@
 
 DSH Web GUI 的个人任务管理面板：双月日历、日常清单、每天工作视图与可拖拽的 24 小时时间轴，并支持用自然语言让 AI 提取任务。
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/screenshots/calendar.png" width="520" alt="双月日历与 AI 任务提取" />
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/screenshots/week-view.png" width="400" alt="任务列表（周视图）" />
+  <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/screenshots/day-view.png" width="400" alt="具体当天（24 小时时间轴）" />
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/screenshots/calendar-detail.png" width="640" alt="日历时间条细节：已度过日期与完成勾选" />
+</p>
+
 ## 功能
 
 - **双月日历**：连续两个月网格；每个长期任务按起止日期画成一条彩色时间条。跨周自动分段，每周行默认最多 5 条、超出可展开；双击线条进入拖动模式（拖线身移动日期、拖两端改长度）；已度过的日期段用浅灰雾面 + 细斜纹 + 白色毛玻璃描边标出。
@@ -85,3 +96,14 @@ Requires DSH `>= 0.2.1-rc.2`. Restart DSH or refresh the Web GUI after installin
 ## License
 
 MIT
+
+---
+
+## 吉祥物 / Mascot
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/mascot-hungry.png" width="180" alt="吉祥物：我是吃白饭的大肥鱼" />
+  <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/mascot-punch.png" width="180" alt="吉祥物：杀鲸霸拳" />
+</p>
+
+> 仅供图一乐，与插件功能无关。/ Just for fun; not related to the plugin itself.
