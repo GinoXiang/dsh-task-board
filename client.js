@@ -1,0 +1,3098 @@
+// dsh-task-board — browser half.
+//
+// A full central page (main slot key "task-board") plus a sidebar panel icon:
+//   * top AI extraction bar -> POST /task-board/extract -> editable task draft;
+//   * two-month calendar where long-term projects are colored connected lines;
+//   * daily recurring tasks in Markdown checklist style;
+//   * a daily-work area with two views: a 7-column week overview and a
+//     24-hour day timeline whose blocks move and resize by dragging.
+//
+// Data lives in the Host half (JSON file); this module only renders and posts.
+window.__ModuleLoader__.load({
+  id: 'dsh-task-board',
+  factory: (require) => {
+    const React = require('react')
+    const h = React.createElement
+
+    const NS = 'task-board'
+    const ROUTE = '/task-board'
+    const PANEL_ID = 'task-board'
+    const SNAP = 15
+    const MAX_END = 1439
+    const LAST_SNAP = Math.floor(MAX_END / SNAP) * SNAP
+    const HOUR_H = 40
+    const TL_H = HOUR_H * 24
+    const MAX_WEEK_LANES = 5
+
+    const PALETTE = [
+      '#4C8DFF', '#F2994A', '#27AE60', '#9B51E0', '#EB5757',
+      '#2D9CDB', '#F2C94C', '#6FCF97', '#BB6BD9', '#56CCF2',
+    ]
+
+    const WEEKDAYS_ZH = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+    const WEEKDAYS_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    // --- dictionaries ---------------------------------------------------------
+
+    const zh = {
+      panel: '任务',
+      title: '任务',
+      subtitle: '日历 · 日常 · 每天工作',
+      loading: '正在读取任务…',
+      loadFailed: '读取任务失败：',
+      dataBlocked: '任务数据读取异常：为避免覆盖原文件，自动保存已暂停。',
+      overwriteSave: '仍要保存（覆盖原文件）',
+      retryDiscardConfirm: '重新读取会丢弃当前未保存的修改，继续？',
+      hostMissing: '页面里的插件版本比宿主旧（HTTP 40x）：先刷新页面；若仍旧，确认插件已启用或重启 DSH。',
+      saveFailed: '保存失败：',
+      saved: '已保存',
+      saving: '保存中…',
+      retry: '重试',
+      today: '今天',
+      weekPrev: '上一周',
+      weekNext: '下一周',
+      monthPrev: '上一月',
+      monthNext: '下一月',
+      calendar: '日历',
+      calendarHint: '每条彩色直线是一个长期任务；双击任务线进入拖动，双击空白处退出',
+      daily: '日常任务',
+      dailyHint: '每天重复，勾选只作用于今天',
+      dailyEdit: '编辑',
+      dailyDone: '完成',
+      dailyAddPlaceholder: '新的日常任务，例如：锻炼 30 分钟',
+      dailyAdd: '添加',
+      dailyEmpty: '还没有日常任务：点「编辑」或下方「＋ 日常任务」添加。',
+      dailyDelete: '删除',
+      dailyTodayCheck: '今天完成',
+      work: '每天工作',
+      workWeek: '任务列表',
+      workDay: '具体当天',
+      workEdit: '编辑',
+      weekEmpty: '本周没有安排',
+      workEmpty: '当天没有安排',
+      dayAdd: '＋ 添加任务',
+      dayPrev: '前一天',
+      dayNext: '后一天',
+      dayDailies: '当天日常',
+      dayTasks: '当天任务',
+      noDayTasks: '当天没有任务',
+      dayTimeline: '24 小时安排',
+      timelineHint: '拖动方块移动时间，拖动上下边缘改变起止',
+      slotDone: '标记完成',
+      noDaily: '（没有日常任务）',
+      extractTitle: 'AI 任务提取',
+      extractPlaceholder: '用一句话描述任务，例如：下周一至周五完成结题报告；每天锻炼 30 分钟；今天 14:00-15:30 开组会',
+      extractRun: 'AI 提取',
+      extractBusy: 'AI 识别中…',
+      extractClear: '清空',
+      extractHint: '识别后先确认，再写入对应区域',
+      extractEmpty: '没有识别到任务，换个说法再试一次。',
+      extractFound: (count) => `识别到 ${count} 个任务，可先修改再添加`,
+      extractConfirm: '确定添加',
+      extractCancel: '取消',
+      extractAdded: (count) => `已添加 ${count} 个任务`,
+      extractFallback: 'AI 不可用，已用本地规则识别：',
+      addProject: '＋ 长期任务（日历）',
+      addDaily: '＋ 日常任务',
+      addSlot: '＋ 当天任务',
+      kindProject: '长期任务',
+      kindDaily: '日常任务',
+      kindSlot: '当天任务',
+      quickTaskTitle: '新任务',
+      fieldTitle: '标题',
+      fieldStart: '开始日期',
+      fieldEnd: '结束日期',
+      fieldDate: '日期',
+      fieldStartTime: '开始时间',
+      fieldEndTime: '结束时间',
+      fieldColor: '颜色',
+      fieldNote: '备注',
+      dialogAddProject: '新增长期任务',
+      dialogEditProject: '编辑长期任务',
+      dialogAddDaily: '新增日常任务',
+      dialogAddSlot: '新增当天任务',
+      dialogEditSlot: '编辑当天任务',
+      save: '保存',
+      cancel: '取消',
+      delete: '删除',
+      close: '关闭',
+      editDone: '完成',
+      confirmDelete: '确定删除这个任务？',
+      projectSelected: '已选长期任务：',
+      projectEdit: '编辑',
+      projectDelete: '删除',
+      projectCancel: '取消选择',
+      projectDragDone: '完成拖动',
+      dragModeHint: '拖动线身移动日期，拖动左右两端调整长度；双击空白处退出',
+      slotsToday: '当天',
+      errorTitle: '标题不能为空',
+      errorDates: '结束日期不能早于开始日期',
+      errorTime: '结束时间必须晚于开始时间',
+      formInvalid: '有任务信息不完整，请补全红色标注的条目',
+      projectDrag: '拖动调整长度',
+      emptyWeekCol: '—',
+      noTasksToday: '今天没有定时任务，双击时间轴空白处可快速添加',
+      projectCount: (count) => `${count} 个长期任务`,
+      dailyCount: (count) => `${count} 项`,
+      weekRange: (a, b) => `${a} – ${b}`,
+      monthRange: (a, b) => `${a} – ${b}`,
+      moreTasks: (count) => `还有 ${count} 项`,
+      lessTasks: '收起',
+      dailyToggle: (done) => (done ? '今天已完成，点击取消' : '标记今天完成'),
+    }
+
+    const en = {
+      panel: 'Tasks',
+      title: 'Tasks',
+      subtitle: 'Calendar · Daily · Weekly work',
+      loading: 'Loading tasks…',
+      loadFailed: 'Could not load tasks: ',
+      dataBlocked: 'Task data could not be read cleanly; autosave is paused to avoid overwriting the original file.',
+      overwriteSave: 'Save anyway (overwrite original)',
+      retryDiscardConfirm: 'Reloading discards unsaved changes. Continue?',
+      hostMissing: 'The page plugin is older than the host (HTTP 40x): refresh the page, then confirm the plugin is enabled or restart DSH.',
+      saveFailed: 'Could not save: ',
+      saved: 'Saved',
+      saving: 'Saving…',
+      retry: 'Retry',
+      today: 'Today',
+      weekPrev: 'Previous week',
+      weekNext: 'Next week',
+      monthPrev: 'Previous month',
+      monthNext: 'Next month',
+      calendar: 'Calendar',
+      calendarHint: 'Each colored line is a long-term task; double-click a line to drag it, double-click empty space to exit',
+      daily: 'Daily tasks',
+      dailyHint: 'Repeats every day; checking applies to today only',
+      dailyEdit: 'Edit',
+      dailyDone: 'Done',
+      dailyAddPlaceholder: 'New daily task, e.g. exercise 30 minutes',
+      dailyAdd: 'Add',
+      dailyEmpty: 'No daily tasks yet: use Edit or “+ Daily task” below.',
+      dailyDelete: 'Delete',
+      dailyTodayCheck: 'Done today',
+      work: 'Daily work',
+      workWeek: 'Task list',
+      workDay: 'This day',
+      workEdit: 'Edit',
+      weekEmpty: 'Nothing planned this week',
+      workEmpty: 'Nothing planned this day',
+      dayAdd: '+ Add task',
+      dayPrev: 'Previous day',
+      dayNext: 'Next day',
+      dayDailies: 'Daily tasks',
+      dayTasks: 'Tasks of the day',
+      noDayTasks: 'No tasks for this day',
+      dayTimeline: '24-hour schedule',
+      timelineHint: 'Drag a block to move it, drag its top or bottom edge to resize',
+      slotDone: 'Mark done',
+      noDaily: '(no daily tasks)',
+      extractTitle: 'AI task extraction',
+      extractPlaceholder: 'Describe tasks in one sentence, e.g. “next Monday to Friday finish the report; exercise 30 minutes every day; meeting today 14:00-15:30”',
+      extractRun: 'Extract',
+      extractBusy: 'Extracting…',
+      extractClear: 'Clear',
+      extractHint: 'Review the result, then write it into the matching area',
+      extractEmpty: 'No task recognized. Try rephrasing.',
+      extractFound: (count) => `Recognized ${count} task(s); adjust before adding`,
+      extractConfirm: 'Add',
+      extractCancel: 'Cancel',
+      extractAdded: (count) => `Added ${count} task(s)`,
+      extractFallback: 'AI unavailable, local rules were used: ',
+      addProject: '+ Long-term task (calendar)',
+      addDaily: '+ Daily task',
+      addSlot: '+ Task for the day',
+      kindProject: 'Long-term',
+      kindDaily: 'Daily',
+      kindSlot: 'Scheduled',
+      quickTaskTitle: 'New task',
+      fieldTitle: 'Title',
+      fieldStart: 'Start date',
+      fieldEnd: 'End date',
+      fieldDate: 'Date',
+      fieldStartTime: 'Start time',
+      fieldEndTime: 'End time',
+      fieldColor: 'Color',
+      fieldNote: 'Note',
+      dialogAddProject: 'New long-term task',
+      dialogEditProject: 'Edit long-term task',
+      dialogAddDaily: 'New daily task',
+      dialogAddSlot: 'New task for the day',
+      dialogEditSlot: 'Edit scheduled task',
+      save: 'Save',
+      cancel: 'Cancel',
+      delete: 'Delete',
+      close: 'Close',
+      editDone: 'Done',
+      confirmDelete: 'Delete this task?',
+      projectSelected: 'Selected: ',
+      projectEdit: 'Edit',
+      projectDelete: 'Delete',
+      projectCancel: 'Clear selection',
+      projectDragDone: 'Done',
+      dragModeHint: 'Drag the body to move dates, drag either end to resize; double-click empty space to exit',
+      slotsToday: 'day',
+      errorTitle: 'A title is required',
+      errorDates: 'End date cannot be before start date',
+      errorTime: 'End time must be after start time',
+      formInvalid: 'Some tasks are incomplete; fix the highlighted rows',
+      projectDrag: 'Drag to resize',
+      emptyWeekCol: '—',
+      noTasksToday: 'No timed tasks today; double-click an empty spot on the timeline to add one',
+      projectCount: (count) => `${count} long-term task(s)`,
+      dailyCount: (count) => `${count} item(s)`,
+      weekRange: (a, b) => `${a} – ${b}`,
+      monthRange: (a, b) => `${a} – ${b}`,
+      moreTasks: (count) => `${count} more`,
+      lessTasks: 'Collapse',
+      dailyToggle: (done) => (done ? 'Done today; click to undo' : 'Mark done today'),
+    }
+
+    // --- styles ---------------------------------------------------------------
+
+    const CSS = [
+      '.tb-page{display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0;overflow:auto;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.5}',
+      '.tb-shell{display:flex;flex-direction:column;gap:16px;width:100%;max-width:1720px;margin:0 auto;box-sizing:border-box;padding:0 clamp(14px,2.6vw,30px) 44px}',
+      '.tb-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding:20px 0 0;flex-wrap:wrap}',
+      '.tb-title{margin:0;font-size:19px;font-weight:600;line-height:28px}',
+      '.tb-sub{font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.tb-save{font-size:12px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}',
+      '.tb-save[data-error]{color:var(--dsw-alias-state-error-primary)}',
+      '.tb-banner{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.tb-banner[data-error]{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}',
+      '.tb-card{border:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));border-radius:var(--dsw-radius-md,10px);background:var(--dsw-alias-bg-layer-1);overflow:hidden}',
+      '.tb-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 14px;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18))}',
+      '.tb-card-title{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600}',
+      '.tb-card-sub{font-size:12px;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-card-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.tb-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:28px;padding:0 11px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.4));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:1;white-space:nowrap;cursor:pointer}',
+      '.tb-btn:hover{background:var(--dsw-alias-bg-layer-2)}',
+      '.tb-btn:disabled{opacity:.5;cursor:default}',
+      '.tb-btn:disabled:hover{background:var(--dsw-alias-bg-layer-1)}',
+      '.tb-btn-primary{border-color:transparent;background:var(--dsw-alias-brand-primary);color:#fff}',
+      '.tb-btn-primary:hover{background:var(--dsw-alias-brand-primary);opacity:.88}',
+      '.tb-btn-quiet{border-color:transparent;background:transparent;color:var(--dsw-alias-label-secondary);padding:0 8px}',
+      '.tb-btn-quiet:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}',
+      '.tb-btn-danger{border-color:transparent;background:transparent;color:var(--dsw-alias-state-error-primary)}',
+      '.tb-btn-danger:hover{background:var(--dsw-alias-bg-layer-2)}',
+      '.tb-btn-icon{width:26px;height:26px;padding:0;border-color:transparent;background:transparent;color:var(--dsw-alias-label-secondary)}',
+      '.tb-btn-icon:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}',
+      '.tb-extract{display:flex;flex-direction:column;gap:9px;padding:13px 14px;border:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));border-radius:var(--dsw-radius-md,10px);background:var(--dsw-alias-bg-layer-1)}',
+      '.tb-extract-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.tb-extract-label{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}',
+      '.tb-textarea{display:block;width:100%;box-sizing:border-box;min-height:54px;max-height:180px;resize:vertical;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.4));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1.55}',
+      '.tb-textarea:focus,.tb-input:focus,.tb-select:focus{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-1px}',
+      '.tb-extract-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.tb-hint{font-size:12px;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-hint-warn{font-size:12px;color:var(--dsw-alias-state-warn-primary,#c98a1b)}',
+      '.tb-hint-error{font-size:12px;color:var(--dsw-alias-state-error-primary)}',
+      '.tb-addrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:9px;border-top:1px dashed var(--dsw-alias-border-l1,rgba(128,128,128,.18))}',
+      '.tb-extract-result{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-2)}',
+      '.tb-extract-result-head{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-secondary);flex-wrap:wrap}',
+      '.tb-erow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px;border:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base)}',
+      '.tb-erow-main{display:flex;align-items:center;gap:6px;flex:1 1 220px;min-width:0}',
+      '.tb-erow-fields{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.tb-input,.tb-select{height:26px;box-sizing:border-box;padding:0 7px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.4));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;min-width:0}',
+      '.tb-input-title{flex:1 1 160px}',
+      '.tb-input-date{width:128px}',
+      '.tb-input-time{width:86px}',
+      '.tb-color{appearance:none;flex:none;width:26px;height:26px;padding:0;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.4));border-radius:var(--dsw-radius-sm,6px);background:transparent;cursor:pointer}',
+      '.tb-kind{display:inline-flex;flex:none;align-items:center;height:20px;padding:0 7px;border-radius:10px;font-size:11px;line-height:20px;color:#fff;white-space:nowrap}',
+      '.tb-kind[data-kind="project"]{background:#4C8DFF}',
+      '.tb-kind[data-kind="daily"]{background:#27AE60}',
+      '.tb-kind[data-kind="slot"]{background:#F2994A}',
+      '.tb-cal{padding:8px 12px 12px}',
+      '.tb-cal-weekhead{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0;padding:0 0 5px;font-size:11px;color:var(--dsw-alias-label-tertiary);text-align:center}',
+      '.tb-week{display:flex;flex-direction:column;padding:5px 5px 4px;margin-top:5px;border-radius:var(--dsw-radius-sm,6px);border-top:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.35))}',
+      '.tb-cal-weekhead + .tb-week{margin-top:0;padding-top:2px;border-top:none}',
+      '.tb-week[data-even]{background:linear-gradient(rgba(128,128,128,.09),rgba(128,128,128,.09)),var(--dsw-alias-bg-layer-1)}',
+      '.tb-week[data-month-start]{border-top:2px solid var(--dsw-alias-border-l2,rgba(128,128,128,.5))}',
+      '.tb-week:hover{box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l1,rgba(128,128,128,.28))}',
+      '.tb-week-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0}',
+      '.tb-day{appearance:none;display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-height:32px;padding:3px 6px;border:1px solid transparent;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;text-align:left;cursor:pointer;position:relative}',
+      '.tb-day:hover{background:rgba(128,128,128,.16)}',
+      '.tb-day[data-outside]{color:var(--dsw-alias-label-tertiary)}',
+      '.tb-day[data-today]{border-color:var(--dsw-alias-brand-primary)}',
+      '.tb-day[data-selected]{box-shadow:inset 0 0 0 1.5px var(--dsw-alias-brand-primary)}',
+      '.tb-day-num{font-size:12px;line-height:16px;font-variant-numeric:tabular-nums}',
+      '.tb-day-today-mark{position:absolute;top:5px;right:6px;width:5px;height:5px;border-radius:50%;background:var(--dsw-alias-brand-primary)}',
+      '.tb-lanes{position:relative;margin-top:2px}',
+      '.tb-bar{position:absolute;left:0;display:flex;align-items:center;gap:4px;height:15px;box-sizing:border-box;padding:0 8px;border-radius:8px;color:#fff;font-size:11px;line-height:15px;white-space:nowrap;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,.06);user-select:none}',
+      '.tb-bar[data-selected]{box-shadow:0 0 0 2px var(--dsw-alias-label-primary)}',
+      '.tb-bar[data-editing]{cursor:grab;box-shadow:0 0 0 2px var(--dsw-alias-brand-primary)}',
+      '.tb-bar-title{position:relative;z-index:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:700;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5)}',
+      '.tb-bar-past{position:absolute;left:0;top:0;bottom:0;box-sizing:border-box;border-radius:6px;pointer-events:none;border-top:2px solid rgba(255,255,255,.72);border-bottom:2px solid rgba(255,255,255,.72);border-left:0;border-right:0;background-color:rgba(184,184,184,.40);background-image:repeating-linear-gradient(45deg,rgba(232,232,232,.62) 0 1.5px,rgba(232,232,232,0) 1.5px 5px);box-shadow:inset 0 0 7px rgba(255,255,255,.30),0 0 3px rgba(255,255,255,.22)}',
+      '.tb-bar-handle{position:absolute;z-index:2;top:1px;bottom:1px;width:9px;border-radius:5px;background:rgba(255,255,255,.55);cursor:ew-resize;display:none}',
+      '.tb-bar[data-editing] .tb-bar-handle{display:block}',
+      '.tb-bar-handle-start{left:2px}',
+      '.tb-bar-handle-end{right:2px}',
+      '.tb-bar[data-editing] .tb-bar-title{padding:0 10px}',
+      '.tb-more{appearance:none;align-self:flex-start;margin:3px 0 0 3px;padding:1px 9px;border:1px dashed var(--dsw-alias-border-l2,rgba(128,128,128,.4));border-radius:10px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:17px;cursor:pointer}',
+      '.tb-more:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}',
+      '.tb-nav{display:flex;align-items:center;gap:6px}',
+      '.tb-nav-label{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}',
+      '.tb-weekgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;padding:12px 14px;min-height:200px;overflow-x:auto}',
+      '.tb-wcol{display:flex;flex-direction:column;min-width:0;border:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));border-radius:var(--dsw-radius-sm,6px);overflow:hidden;background:var(--dsw-alias-bg-base)}',
+      '.tb-wcol[data-today]{border-color:var(--dsw-alias-brand-primary)}',
+      '.tb-wcol[data-past]{background:#E5ECFD;border-color:#D5DEEE;color:#1F2329}',
+      '.tb-wcol-head{appearance:none;display:flex;align-items:center;justify-content:space-between;gap:4px;padding:6px 8px;border:none;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));background:transparent;color:inherit;font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer}',
+      '.tb-wcol-head:hover{background:rgba(128,128,128,.1)}',
+      '.tb-wcol[data-past] .tb-wcol-head{border-bottom-color:#D5DEEE}',
+      '.tb-wcol-head-date{font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}',
+      '.tb-wcol[data-past] .tb-wcol-head-date{color:#5A6472}',
+      '.tb-wcol-body{flex:1;display:flex;flex-direction:column;gap:4px;padding:6px;min-height:130px}',
+      '.tb-wtask{display:flex;align-items:center;gap:5px;font-size:12px;line-height:18px;min-width:0}',
+      '.tb-checkbox-sm{width:16px;height:16px;border-radius:5px}',
+      '.tb-checkbox-sm svg{width:10px;height:10px;stroke-width:2.6}',
+      '.tb-daypanels{flex:none;width:236px;max-width:100%;display:flex;flex-direction:column;gap:10px}',
+      '.tb-daypanels .tb-dailypanel{width:100%}',
+      '.tb-daytask-list{display:flex;flex-direction:column;gap:2px}',
+      '.tb-daytask{display:flex;align-items:center;gap:6px;min-width:0;padding:1px 2px;border-radius:4px;font-size:12px;line-height:20px;cursor:pointer}',
+      '.tb-daytask:hover{background:rgba(128,128,128,.12)}',
+      '.tb-daytask[data-done] .tb-wtask-title{text-decoration:line-through;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-wtask-time{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}',
+      '.tb-wcol[data-past] .tb-wtask-time{color:#5A6472}',
+      '.tb-wdot{flex:none;width:8px;height:8px;border-radius:50%}',
+      '.tb-wtask-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.tb-wempty{font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-dayview{display:flex;flex-direction:column;gap:10px;padding:12px 14px}',
+      '.tb-daybar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.tb-daybody{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}',
+      '.tb-dailypanel{flex:none;width:236px;max-width:100%;display:flex;flex-direction:column;gap:5px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-2)}',
+      '.tb-panel-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}',
+      '.tb-panel-hint{font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-mdlist{list-style:none;display:flex;flex-direction:column;gap:3px;margin:0;padding:0}',
+      '.tb-mditem{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px;line-height:20px}',
+      '.tb-checkbox{appearance:none;flex:none;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;box-sizing:border-box;border:1.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.45));border-radius:6px;background:transparent;color:#fff;cursor:pointer;transition:background .12s,border-color .12s}',
+      '.tb-checkbox:hover{border-color:var(--dsw-alias-state-success-primary,#2FBF71)}',
+      '.tb-checkbox[data-checked]{border-color:transparent;background:var(--dsw-alias-state-success-primary,#2FBF71)}',
+      '.tb-checkbox svg{width:13px;height:13px;stroke-width:2.4}',
+      '.tb-mdcheck{appearance:none;flex:none;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:20px;cursor:pointer}',
+      '.tb-mdcheck:hover{color:var(--dsw-alias-brand-primary)}',
+      '.tb-mdcheck[data-done]{color:var(--dsw-alias-state-success-primary)}',
+      '.tb-mdtitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.tb-md-edit{appearance:none;flex:none;margin-left:auto;padding:0 4px;border:none;border-radius:4px;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px;cursor:pointer}',
+      '.tb-md-edit:hover{background:rgba(128,128,128,.14);color:var(--dsw-alias-state-error-primary)}',
+      '.tb-daily-body{padding:10px 14px 14px;display:flex;flex-direction:column;gap:8px}',
+      '.tb-daily-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 18px}',
+      '.tb-daily-add{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.tb-timeline{flex:1;min-width:280px;display:flex;border:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base);overflow:hidden}',
+      '.tb-tl-hours{flex:none;width:52px;border-right:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18));background:var(--dsw-alias-bg-layer-2)}',
+      '.tb-tl-hour{position:relative;box-sizing:border-box;border-bottom:1px solid transparent;font-size:10px;color:var(--dsw-alias-label-tertiary);text-align:right;padding-right:7px;font-variant-numeric:tabular-nums}',
+      '.tb-tl-hour-label{position:absolute;right:7px;top:-7px;padding:0 2px;background:var(--dsw-alias-bg-layer-2)}',
+      '.tb-tl-content{position:relative;flex:1;min-width:0;cursor:crosshair}',
+      '.tb-tl-lines{position:absolute;inset:0;pointer-events:none}',
+      '.tb-tl-line{box-sizing:border-box;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18))}',
+      '.tb-slot{position:absolute;box-sizing:border-box;display:flex;flex-direction:column;gap:0;padding:3px 6px;border-radius:6px;color:#fff;font-size:11px;line-height:14px;overflow:hidden;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.16);user-select:none;min-height:15px}',
+      '.tb-slot[data-drag]{cursor:grabbing;z-index:4;opacity:.9;box-shadow:0 6px 16px rgba(0,0,0,.32)}',
+      '.tb-slot-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.22)}',
+      '.tb-slot-time{font-size:10px;opacity:.92;font-variant-numeric:tabular-nums;white-space:nowrap}',
+      '.tb-slot[data-done] .tb-slot-title{text-decoration:line-through;opacity:.78}',
+      '.tb-slot-handle{position:absolute;left:2px;right:2px;height:7px;border-radius:4px;background:rgba(255,255,255,.45);cursor:ns-resize;display:none;z-index:2}',
+      '.tb-slot-handle-top{top:1px}',
+      '.tb-slot-handle-bottom{bottom:1px}',
+      '.tb-slot:hover .tb-slot-handle,.tb-slot[data-drag] .tb-slot-handle{display:block}',
+      '.tb-slot-done{appearance:none;position:absolute;top:2px;right:3px;z-index:3;width:14px;height:14px;padding:0;border:1px solid currentColor;border-radius:4px;background:rgba(0,0,0,.12);color:inherit;font-size:10px;line-height:12px;text-align:center;cursor:pointer}',
+      '.tb-tl-now{position:absolute;left:0;right:0;height:0;border-top:2px solid var(--dsw-alias-state-error-primary,#e5484d);z-index:3;pointer-events:none}',
+      '.tb-tl-now::before{content:"";position:absolute;left:-4px;top:-4px;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-error-primary,#e5484d)}',
+      '.tb-dragtip{position:fixed;z-index:70;padding:3px 8px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.4));border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-overlay,#fff);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;pointer-events:none;box-shadow:0 6px 16px rgba(0,0,0,.2)}',
+      '.tb-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.38)}',
+      '.tb-modal{width:min(440px,100%);max-height:86vh;display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.4));border-radius:var(--dsw-radius-md,10px);background:var(--dsw-alias-bg-overlay,#fff);color:var(--dsw-alias-label-primary);box-shadow:0 18px 48px rgba(0,0,0,.3)}',
+      '.tb-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18))}',
+      '.tb-modal-title{margin:0;font-size:15px;font-weight:600}',
+      '.tb-modal-body{display:flex;flex-direction:column;gap:12px;padding:14px 16px;overflow:auto}',
+      '.tb-modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.18))}',
+      '.tb-field{display:flex;flex-direction:column;gap:5px;min-width:0}',
+      '.tb-field-label{font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.tb-field-row{display:flex;gap:10px}',
+      '.tb-field-row .tb-field{flex:1}',
+      '.tb-swatches{display:flex;flex-wrap:wrap;gap:6px}',
+      '.tb-swatch{appearance:none;width:20px;height:20px;padding:0;border:2px solid transparent;border-radius:50%;cursor:pointer}',
+      '.tb-swatch[data-on]{border-color:var(--dsw-alias-label-primary)}',
+      '.tb-form-error{font-size:12px;color:var(--dsw-alias-state-error-primary)}',
+      '.tb-flash{font-size:12px;color:var(--dsw-alias-state-success-primary)}',
+      '.tb-empty{font-size:12px;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-loading{padding:48px 0;text-align:center;font-size:13px;color:var(--dsw-alias-label-secondary)}',
+      '.tb-crash{padding:24px;display:flex;flex-direction:column;gap:8px}',
+      '.tb-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}',
+    ].join('')
+
+    // --- date and value helpers ----------------------------------------------
+
+    function pad2(value) {
+      return String(value).padStart(2, '0')
+    }
+
+    function dateKey(date) {
+      return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+    }
+
+    function parseKey(key) {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key === undefined || key === null ? '' : key))
+      if (match === null) return null
+      const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+      if (Number.isNaN(date.getTime())) return null
+      if (date.getMonth() !== Number(match[2]) - 1 || date.getDate() !== Number(match[3])) return null
+      return date
+    }
+
+    function isDateKey(value) {
+      return typeof value === 'string' && parseKey(value) !== null
+    }
+
+    function todayKey() {
+      return dateKey(new Date())
+    }
+
+    function addDays(key, amount) {
+      const date = parseKey(key) || new Date()
+      date.setDate(date.getDate() + amount)
+      return dateKey(date)
+    }
+
+    function startOfWeek(key) {
+      const date = parseKey(key) || new Date()
+      const offset = (date.getDay() + 6) % 7
+      date.setDate(date.getDate() - offset)
+      return dateKey(date)
+    }
+
+    function startOfMonth(key) {
+      const date = parseKey(key) || new Date()
+      return dateKey(new Date(date.getFullYear(), date.getMonth(), 1))
+    }
+
+    function addMonths(key, amount) {
+      const date = parseKey(key) || new Date()
+      return dateKey(new Date(date.getFullYear(), date.getMonth() + amount, 1))
+    }
+
+    function endOfMonth(key) {
+      const date = parseKey(key) || new Date()
+      return dateKey(new Date(date.getFullYear(), date.getMonth() + 1, 0))
+    }
+
+    function daysBetween(from, to) {
+      const a = parseKey(from)
+      const b = parseKey(to)
+      if (a === null || b === null) return 0
+      return Math.round((b.getTime() - a.getTime()) / 86400000)
+    }
+
+    function weekdayIndex(key) {
+      const date = parseKey(key)
+      return date === null ? 0 : (date.getDay() + 6) % 7
+    }
+
+    function weekdayZh(key) {
+      return WEEKDAYS_ZH[weekdayIndex(key)]
+    }
+
+    function weekdayEn(key) {
+      return WEEKDAYS_EN[weekdayIndex(key)]
+    }
+
+    function monthText(key) {
+      const date = parseKey(key)
+      if (date === null) return String(key || '')
+      if (activeLanguage().toLowerCase().startsWith('zh')) return `${date.getFullYear()}年${date.getMonth() + 1}月`
+      return `${MONTHS_EN[date.getMonth()]} ${date.getFullYear()}`
+    }
+
+    function monthShort(key) {
+      const date = parseKey(key)
+      if (date === null) return ''
+      if (activeLanguage().toLowerCase().startsWith('zh')) return `${date.getMonth() + 1}月`
+      return MONTHS_EN[date.getMonth()]
+    }
+
+    function monthTextShort(key) {
+      const date = parseKey(key)
+      return date === null ? String(key || '') : `${date.getFullYear()}·${date.getMonth() + 1}月`
+    }
+
+    function dayText(key) {
+      const date = parseKey(key)
+      return date === null ? String(key || '') : `${date.getMonth() + 1}月${date.getDate()}日`
+    }
+
+    function dayTextEn(key) {
+      const date = parseKey(key)
+      if (date === null) return String(key || '')
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+      return `${months[date.getMonth()]} ${date.getDate()}`
+    }
+
+    function minutesText(minutes) {
+      const rounded = Math.round(minutes)
+      // 1440 is a legal end-of-day boundary (24:00); wrapping it to 00:00 would
+      // make an existing block uneditable in a <input type="time">.
+      if (rounded >= 1440) return '24:00'
+      const value = ((rounded % 1440) + 1440) % 1440
+      return `${pad2(Math.floor(value / 60))}:${pad2(value % 60)}`
+    }
+
+    function minutesFromText(text) {
+      const match = /^(\d{1,2}):(\d{2})$/.exec(String(text === undefined || text === null ? '' : text).trim())
+      if (match === null) return null
+      const hours = Number(match[1])
+      const mins = Number(match[2])
+      if (hours > 23 || mins > 59) return null
+      return hours * 60 + mins
+    }
+
+    function rangeKeys(start, end) {
+      const keys = []
+      const last = parseKey(end)
+      if (last === null) return keys
+      let cursor = parseKey(start)
+      if (cursor === null) return keys
+      while (cursor.getTime() <= last.getTime() && keys.length <= 800) {
+        keys.push(dateKey(cursor))
+        cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1)
+      }
+      return keys
+    }
+
+    function clamp(value, low, high) {
+      return Math.min(high, Math.max(low, value))
+    }
+
+    function uid(prefix) {
+      return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+    }
+
+    function isColor(value) {
+      return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)
+    }
+
+    function pickColor(list) {
+      return PALETTE[list.length % PALETTE.length]
+    }
+
+    /** Pick near-black or white text for a known fill color by WCAG luminance. */
+    function readableOn(color) {
+      if (!isColor(color)) return '#FFFFFF'
+      const raw = color.slice(1)
+      const channels = [0, 2, 4].map((offset) => {
+        const part = parseInt(raw.slice(offset, offset + 2), 16) / 255
+        return part <= 0.04045 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4
+      })
+      const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+      const white = 1.05 / (luminance + 0.05)
+      const dark = (luminance + 0.05) / 0.063
+      return white >= dark ? '#FFFFFF' : '#1F2329'
+    }
+
+    // --- HTTP -----------------------------------------------------------------
+
+    async function post(routePath, body) {
+      const response = await fetch(`${ROUTE}${routePath}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body === undefined ? {} : body),
+      })
+      let data = {}
+      try {
+        data = await response.json()
+      } catch {
+        data = {}
+      }
+      if (!response.ok || !data || data.ok !== true) {
+        const detail = data && data.error ? data.error : response.ok ? 'unexpected response' : `HTTP ${response.status}`
+        const error = new Error(detail)
+        error.status = response.status
+        throw error
+      }
+      return data
+    }
+
+    // --- store shape ----------------------------------------------------------
+
+    function emptyStore() {
+      return { version: 1, projects: [], dailyTasks: [], dayPlans: {} }
+    }
+
+    function normalizeStore(raw) {
+      const store = emptyStore()
+      if (raw === null || typeof raw !== 'object') return store
+      if (Array.isArray(raw.projects)) {
+        for (const entry of raw.projects.slice(0, 2000)) {
+          if (!entry || typeof entry !== 'object') continue
+          const title = typeof entry.title === 'string' ? entry.title.trim() : ''
+          if (title === '' || !isDateKey(entry.start)) continue
+          const end = isDateKey(entry.end) && daysBetween(entry.start, entry.end) >= 0 ? entry.end : entry.start
+          store.projects.push({
+            id: typeof entry.id === 'string' && entry.id !== '' ? entry.id : uid('p'),
+            title: title.slice(0, 200),
+            color: isColor(entry.color) ? entry.color : pickColor(store.projects),
+            start: entry.start,
+            end,
+            note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : '',
+            done: entry.done === true,
+          })
+        }
+      }
+      if (Array.isArray(raw.dailyTasks)) {
+        for (const entry of raw.dailyTasks.slice(0, 2000)) {
+          if (!entry || typeof entry !== 'object') continue
+          const title = typeof entry.title === 'string' ? entry.title.trim() : ''
+          if (title === '') continue
+          const doneDates = Array.isArray(entry.doneDates)
+            ? entry.doneDates.filter(isDateKey).slice(-3660)
+            : []
+          store.dailyTasks.push({
+            id: typeof entry.id === 'string' && entry.id !== '' ? entry.id : uid('d'),
+            title: title.slice(0, 200),
+            doneDates,
+          })
+        }
+      }
+      if (raw.dayPlans && typeof raw.dayPlans === 'object') {
+        let days = 0
+        for (const key of Object.keys(raw.dayPlans)) {
+          if (!isDateKey(key) || days >= 3660) continue
+          const list = raw.dayPlans[key]
+          if (!Array.isArray(list)) continue
+          const slots = []
+          for (const entry of list.slice(0, 500)) {
+            if (!entry || typeof entry !== 'object') continue
+            const title = typeof entry.title === 'string' ? entry.title.trim() : ''
+            if (title === '') continue
+            const start = Number.isFinite(entry.start) ? clamp(Math.round(entry.start), 0, 1440) : NaN
+            const end = Number.isFinite(entry.end) ? clamp(Math.round(entry.end), 0, 1440) : NaN
+            if (!(end > start)) continue
+            slots.push({
+              id: typeof entry.id === 'string' && entry.id !== '' ? entry.id : uid('s'),
+              title: title.slice(0, 200),
+              start,
+              end,
+              color: isColor(entry.color) ? entry.color : pickColor(slots),
+              done: entry.done === true,
+            })
+          }
+          if (slots.length > 0) {
+            slots.sort((a, b) => a.start - b.start || a.end - b.end)
+            store.dayPlans[key] = slots
+            days += 1
+          }
+        }
+      }
+      // React keys and patch-by-id assume uniqueness; the host only guarantees a
+      // non-empty string id, so duplicates are repaired here.
+      const seenIds = new Set()
+      const repairId = (item, prefix) => {
+        if (seenIds.has(item.id)) item.id = uid(prefix)
+        seenIds.add(item.id)
+      }
+      for (const project of store.projects) repairId(project, 'p')
+      for (const task of store.dailyTasks) repairId(task, 'd')
+      for (const key of Object.keys(store.dayPlans)) {
+        for (const slot of store.dayPlans[key]) repairId(slot, 's')
+      }
+      return store
+    }
+
+    function slotsOn(store, key) {
+      const list = store.dayPlans[key]
+      if (!Array.isArray(list)) return []
+      return list.slice().sort((a, b) => a.start - b.start || a.end - b.end)
+    }
+
+    function projectsOn(store, key) {
+      return store.projects.filter((project) => project.start <= key && key <= project.end)
+    }
+
+    function withProject(store, project) {
+      return { ...store, projects: [...store.projects, project] }
+    }
+
+    function patchProject(store, id, patch) {
+      return { ...store, projects: store.projects.map((project) => (project.id === id ? { ...project, ...patch } : project)) }
+    }
+
+    function toggleProjectDone(store, id) {
+      return {
+        ...store,
+        projects: store.projects.map((project) => (
+          project.id === id ? { ...project, done: project.done !== true } : project
+        )),
+      }
+    }
+
+    function withoutProject(store, id) {
+      return { ...store, projects: store.projects.filter((project) => project.id !== id) }
+    }
+
+    function withDailyTask(store, title) {
+      return { ...store, dailyTasks: [...store.dailyTasks, { id: uid('d'), title, doneDates: [] }] }
+    }
+
+    function withoutDailyTask(store, id) {
+      return { ...store, dailyTasks: store.dailyTasks.filter((task) => task.id !== id) }
+    }
+
+    function renameDailyTask(store, id, title) {
+      return {
+        ...store,
+        dailyTasks: store.dailyTasks.map((task) => (task.id === id ? { ...task, title } : task)),
+      }
+    }
+
+    function toggleDailyDone(store, id, key) {
+      return {
+        ...store,
+        dailyTasks: store.dailyTasks.map((task) => {
+          if (task.id !== id) return task
+          const has = task.doneDates.includes(key)
+          return {
+            ...task,
+            doneDates: has ? task.doneDates.filter((value) => value !== key) : task.doneDates.concat([key]).slice(-3660),
+          }
+        }),
+      }
+    }
+
+    function withSlot(store, key, slot) {
+      const list = slotsOn(store, key).concat([slot]).sort((a, b) => a.start - b.start || a.end - b.end)
+      return { ...store, dayPlans: { ...store.dayPlans, [key]: list } }
+    }
+
+    function patchSlot(store, key, id, patch) {
+      const list = slotsOn(store, key)
+        .map((slot) => (slot.id === id ? { ...slot, ...patch } : slot))
+        .sort((a, b) => a.start - b.start || a.end - b.end)
+      return { ...store, dayPlans: { ...store.dayPlans, [key]: list } }
+    }
+
+    function withoutSlot(store, key, id) {
+      const list = slotsOn(store, key).filter((slot) => slot.id !== id)
+      const dayPlans = { ...store.dayPlans }
+      if (list.length > 0) dayPlans[key] = list
+      else delete dayPlans[key]
+      return { ...store, dayPlans }
+    }
+
+    // --- locale ---------------------------------------------------------------
+
+    let localeService = null
+
+    function activeLanguage() {
+      try {
+        if (localeService && typeof localeService.getSnapshot === 'function') {
+          const snapshot = localeService.getSnapshot()
+          if (snapshot && typeof snapshot.active === 'string' && snapshot.active !== '') return snapshot.active
+        }
+      } catch {
+        // fall through to the browser language
+      }
+      if (typeof navigator !== 'undefined') return String(navigator.language || '')
+      return 'zh'
+    }
+
+    function currentDict() {
+      return activeLanguage().toLowerCase().startsWith('zh') ? zh : en
+    }
+
+    function formatDay(key) {
+      return activeLanguage().toLowerCase().startsWith('zh') ? dayText(key) : dayTextEn(key)
+    }
+
+    function formatWeekday(key) {
+      return activeLanguage().toLowerCase().startsWith('zh') ? weekdayZh(key) : weekdayEn(key)
+    }
+
+    function useDict() {
+      const [revision, setRevision] = React.useState(0)
+      React.useEffect(() => {
+        if (!localeService || typeof localeService.subscribe !== 'function') return undefined
+        return localeService.subscribe(() => setRevision((value) => value + 1))
+      }, [])
+      return React.useMemo(() => {
+        const table = currentDict()
+        return (key, ...args) => {
+          let value = table[key]
+          if (typeof value === 'function') value = value(...args)
+          if (typeof value === 'string') return value
+          const other = table === zh ? en : zh
+          let fallback = other[key]
+          if (typeof fallback === 'function') fallback = fallback(...args)
+          return typeof fallback === 'string' ? fallback : key
+        }
+      }, [revision])
+    }
+
+    // --- data loading and autosave -------------------------------------------
+
+    function useTaskBoard() {
+      const [state, setState] = React.useState({ status: 'loading', data: null, error: null, warning: null, blocked: false })
+      const loadedRef = React.useRef(false)
+      const savedRef = React.useRef(null)
+      const timerRef = React.useRef(null)
+      const queueRef = React.useRef(Promise.resolve())
+      const dataRef = React.useRef(null)
+      const pendingSavesRef = React.useRef(0)
+      const [savedAt, setSavedAt] = React.useState(null)
+      const [saveError, setSaveError] = React.useState(null)
+      const [saving, setSaving] = React.useState(false)
+      const [flash, setFlash] = React.useState(null)
+      const flashTimer = React.useRef(null)
+
+      const showFlash = React.useCallback((message) => {
+        setFlash(message)
+        if (flashTimer.current !== null) clearTimeout(flashTimer.current)
+        flashTimer.current = setTimeout(() => setFlash(null), 2600)
+      }, [])
+
+      React.useEffect(() => () => {
+        if (flashTimer.current !== null) clearTimeout(flashTimer.current)
+        if (timerRef.current !== null) clearTimeout(timerRef.current)
+      }, [])
+
+      /**
+       * Commit one load result. `blocked` protects a file the host refused to
+       * parse (or could not read): the empty fallback store must not overwrite it
+       * until the user explicitly allows that.
+       */
+      const applyLoaded = React.useCallback((store, error, warning) => {
+        loadedRef.current = true
+        savedRef.current = JSON.stringify(store)
+        dataRef.current = store
+        setState({
+          status: 'ready',
+          data: store,
+          error,
+          warning,
+          blocked: error !== null || warning !== null,
+        })
+      }, [])
+
+      React.useEffect(() => {
+        let alive = true
+        post('/load', {}).then((data) => {
+          if (!alive) return
+          applyLoaded(normalizeStore(data.data), null, typeof data.warning === 'string' ? data.warning : null)
+        }).catch((error) => {
+          if (!alive) return
+          const message = String((error && error.message) || error)
+          applyLoaded(emptyStore(), /HTTP 40[45]/.test(message) ? 'host-missing' : message, null)
+        })
+        return () => {
+          alive = false
+        }
+      }, [applyLoaded])
+
+      React.useEffect(() => {
+        if (!loadedRef.current || state.data === null || state.blocked) return undefined
+        const serialized = JSON.stringify(state.data)
+        if (serialized === savedRef.current) {
+          setSaving(false)
+          return undefined
+        }
+        if (timerRef.current !== null) clearTimeout(timerRef.current)
+        const payload = state.data
+        setSaving(true)
+        timerRef.current = setTimeout(() => {
+          timerRef.current = null
+          pendingSavesRef.current += 1
+          // Saves are serialized through one queue so an older payload can never
+          // land after a newer one and leave the file stale.
+          const run = queueRef.current
+            .then(() => post('/save', { data: payload }))
+            .then((data) => {
+              savedRef.current = serialized
+              setSavedAt(typeof data.savedAt === 'string' ? data.savedAt : new Date().toISOString())
+              setSaveError(null)
+            })
+            .catch((error) => {
+              setSaveError(String((error && error.message) || error))
+            })
+            .then(() => {
+              pendingSavesRef.current = Math.max(0, pendingSavesRef.current - 1)
+              if (pendingSavesRef.current === 0) setSaving(false)
+            })
+          queueRef.current = run
+        }, 320)
+        return () => {
+          if (timerRef.current !== null) {
+            clearTimeout(timerRef.current)
+            timerRef.current = null
+          }
+        }
+      }, [state.data, state.blocked])
+
+      const update = React.useCallback((mutator) => {
+        setState((previous) => {
+          if (previous.data === null) return previous
+          return { ...previous, data: mutator(previous.data) }
+        })
+      }, [])
+
+      React.useEffect(() => {
+        dataRef.current = state.data
+      }, [state.data])
+
+      const retry = React.useCallback(() => {
+        setState((previous) => ({ ...previous, status: 'loading', error: null }))
+        loadedRef.current = false
+        post('/load', {}).then((data) => {
+          applyLoaded(normalizeStore(data.data), null, typeof data.warning === 'string' ? data.warning : null)
+        }).catch((error) => {
+          const message = String((error && error.message) || error)
+          applyLoaded(emptyStore(), /HTTP 40[45]/.test(message) ? 'host-missing' : message, null)
+        })
+      }, [applyLoaded])
+
+      /** Let autosave overwrite a file the host reported as unreadable. */
+      const allowSave = React.useCallback(() => {
+        setState((previous) => ({ ...previous, blocked: false }))
+        const payload = dataRef.current
+        if (payload === null || payload === undefined) return
+        const serialized = JSON.stringify(payload)
+        // The click means "write this state to the file", so force one save even
+        // when nothing changed since the blocked load.
+        pendingSavesRef.current += 1
+        setSaving(true)
+        const run = queueRef.current
+          .then(() => post('/save', { data: payload }))
+          .then((data) => {
+            savedRef.current = serialized
+            setSavedAt(typeof data.savedAt === 'string' ? data.savedAt : new Date().toISOString())
+            setSaveError(null)
+          })
+          .catch((error) => {
+            setSaveError(String((error && error.message) || error))
+          })
+          .then(() => {
+            pendingSavesRef.current = Math.max(0, pendingSavesRef.current - 1)
+            if (pendingSavesRef.current === 0) setSaving(false)
+          })
+        queueRef.current = run
+      }, [])
+
+      const dirty = state.data !== null && savedRef.current !== null && JSON.stringify(state.data) !== savedRef.current
+
+      return { ...state, update, retry, allowSave, dirty, savedAt, saveError, saving, flash, showFlash }
+    }
+
+    // --- icons ----------------------------------------------------------------
+
+    function svgProps(size) {
+      return {
+        viewBox: '0 0 24 24',
+        width: size === undefined ? 15 : size,
+        height: size === undefined ? 15 : size,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.7,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+        focusable: 'false',
+        style: { display: 'block', flex: 'none' },
+      }
+    }
+
+    function IconCalendar(props) {
+      return h('svg', svgProps(props && props.size), [
+        h('rect', { key: 'r', x: 3, y: 4.5, width: 18, height: 16, rx: 2.5 }),
+        h('path', { key: 'l1', d: 'M3 9.5h18' }),
+        h('path', { key: 'l2', d: 'M8 2.8v3.4M16 2.8v3.4' }),
+        h('path', { key: 'd', d: 'M8.5 14.2l2.2 2.2 4.4-4.6' }),
+      ])
+    }
+
+    function IconList(props) {
+      return h('svg', svgProps(props && props.size), [
+        h('path', { key: 'a', d: 'M9 6h11M9 12h11M9 18h11' }),
+        h('path', { key: 'b', d: 'M4.5 6h.01M4.5 12h.01M4.5 18h.01' }),
+      ])
+    }
+
+    function IconClock(props) {
+      return h('svg', svgProps(props && props.size), [
+        h('circle', { key: 'c', cx: 12, cy: 12, r: 8.6 }),
+        h('path', { key: 'h', d: 'M12 7.4v5.2l3.2 1.9' }),
+      ])
+    }
+
+    function IconSpark(props) {
+      return h('svg', svgProps(props && props.size), [
+        h('path', { key: 'a', d: 'M12 3.2l1.9 4.9 4.9 1.9-4.9 1.9-1.9 4.9-1.9-4.9L5.2 10l4.9-1.9z' }),
+        h('path', { key: 'b', d: 'M18.6 15.4l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z' }),
+      ])
+    }
+
+    function IconPlus(props) {
+      return h('svg', svgProps(props && props.size), [h('path', { key: 'p', d: 'M12 5.5v13M5.5 12h13' })])
+    }
+
+    function IconChevron(props) {
+      const direction = props && props.dir ? props.dir : 'right'
+      const rotation = direction === 'left' ? 180 : direction === 'up' ? 270 : direction === 'down' ? 90 : 0
+      return h('svg', {
+        ...svgProps(props && props.size),
+        style: { display: 'block', flex: 'none', transform: `rotate(${rotation}deg)`, transition: 'transform .15s' },
+      }, [h('path', { key: 'c', d: 'M9.5 5.5l6.5 6.5-6.5 6.5' })])
+    }
+
+    function IconClose(props) {
+      return h('svg', svgProps(props && props.size), [h('path', { key: 'x', d: 'M6.5 6.5l11 11M17.5 6.5l-11 11' })])
+    }
+
+    function IconTrash(props) {
+      return h('svg', svgProps(props && props.size), [
+        h('path', { key: 'a', d: 'M4.5 6.8h15' }),
+        h('path', { key: 'b', d: 'M9.4 6.8V4.9h5.2v1.9' }),
+        h('path', { key: 'c', d: 'M6.4 6.8l.8 12.1a1.6 1.6 0 001.6 1.5h6.4a1.6 1.6 0 001.6-1.5l.8-12.1' }),
+        h('path', { key: 'd', d: 'M10.2 10.4v6.4M13.8 10.4v6.4' }),
+      ])
+    }
+
+    function IconCheck(props) {
+      return h('svg', svgProps(props && props.size), [h('path', { key: 'c', d: 'M5 12.6l4.4 4.4L19 7.4' })])
+    }
+
+    function IconEdit(props) {
+      return h('svg', svgProps(props && props.size), [
+        h('path', { key: 'a', d: 'M14.4 5.2l4.4 4.4' }),
+        h('path', { key: 'b', d: 'M4.5 19.5l1.2-5.1L15.9 4.2a1.7 1.7 0 012.4 0l1.5 1.5a1.7 1.7 0 010 2.4L9.6 18.3z' }),
+      ])
+    }
+
+    function IconTarget(props) {
+      return h('svg', svgProps(props && props.size), [
+        h('circle', { key: 'a', cx: 12, cy: 12, r: 8.4 }),
+        h('circle', { key: 'b', cx: 12, cy: 12, r: 3.4 }),
+      ])
+    }
+
+    // --- small controls -------------------------------------------------------
+
+    function Btn(props) {
+      const variant = props.variant ? ` tb-btn-${props.variant}` : ''
+      return h('button', {
+        type: 'button',
+        className: `tb-btn${variant}${props.className ? ` ${props.className}` : ''}`,
+        title: props.title,
+        'aria-label': props['aria-label'],
+        disabled: props.disabled === true,
+        onClick: props.onClick,
+      }, props.icon === undefined ? null : props.icon, props.children)
+    }
+
+    function IconBtn(props) {
+      return h('button', {
+        type: 'button',
+        className: 'tb-btn tb-btn-icon',
+        title: props.title,
+        'aria-label': props['aria-label'] || props.title,
+        disabled: props.disabled === true,
+        onClick: props.onClick,
+      }, props.children)
+    }
+
+    function Field(props) {
+      return h('label', { className: 'tb-field' }, [
+        h('span', { key: 'l', className: 'tb-field-label' }, props.label),
+        h(React.Fragment, { key: 'c' }, props.children),
+      ])
+    }
+
+    function Modal(props) {
+      const onClose = props.onClose
+      React.useEffect(() => {
+        const onKey = (event) => {
+          if (event.key === 'Escape') onClose()
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [onClose])
+      return h('div', {
+        className: 'tb-overlay',
+        onMouseDown: (event) => {
+          if (event.target === event.currentTarget) onClose()
+        },
+      }, h('div', { className: 'tb-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': props.title }, [
+        h('div', { key: 'head', className: 'tb-modal-head' }, [
+          h('h3', { key: 'title', className: 'tb-modal-title' }, props.title),
+          h(IconBtn, { key: 'close', title: props.closeLabel || 'Close', onClick: onClose }, h(IconClose)),
+        ]),
+        h('div', { key: 'body', className: 'tb-modal-body' }, props.children),
+        props.footer === undefined ? null : h('div', { key: 'foot', className: 'tb-modal-foot' }, props.footer),
+      ]))
+    }
+
+    /** A form field set for project / daily / slot, shared by all dialogs. */
+    function ProjectForm(props) {
+      const t = props.t
+      const value = props.value
+      const patch = props.patch
+      return h(React.Fragment, null, [
+        h(Field, { key: 'title', label: t('fieldTitle') },
+          h('input', {
+            className: 'tb-input',
+            type: 'text',
+            value: value.title,
+            maxLength: 200,
+            autoFocus: true,
+            onChange: (event) => patch({ title: event.target.value }),
+          })),
+        h('div', { key: 'dates', className: 'tb-field-row' }, [
+          h(Field, { key: 'start', label: t('fieldStart') },
+            h('input', {
+              className: 'tb-input',
+              type: 'date',
+              value: value.start,
+              onChange: (event) => patch({ start: event.target.value }),
+            })),
+          h(Field, { key: 'end', label: t('fieldEnd') },
+            h('input', {
+              className: 'tb-input',
+              type: 'date',
+              value: value.end,
+              onChange: (event) => patch({ end: event.target.value }),
+            })),
+        ]),
+        h(Field, { key: 'color', label: t('fieldColor') }, h('div', { className: 'tb-swatches' },
+          PALETTE.map((color) => h('button', {
+            key: color,
+            type: 'button',
+            className: 'tb-swatch',
+            'aria-label': color,
+            'data-on': value.color === color ? '1' : undefined,
+            style: { background: color },
+            onClick: () => patch({ color }),
+          })))),
+        h(Field, { key: 'note', label: t('fieldNote') },
+          h('textarea', {
+            className: 'tb-textarea',
+            rows: 2,
+            value: value.note,
+            maxLength: 500,
+            onChange: (event) => patch({ note: event.target.value }),
+          })),
+      ])
+    }
+
+    function SlotForm(props) {
+      const t = props.t
+      const value = props.value
+      const patch = props.patch
+      return h(React.Fragment, null, [
+        h(Field, { key: 'title', label: t('fieldTitle') },
+          h('input', {
+            className: 'tb-input',
+            type: 'text',
+            value: value.title,
+            maxLength: 200,
+            autoFocus: true,
+            onChange: (event) => patch({ title: event.target.value }),
+          })),
+        h(Field, { key: 'date', label: t('fieldDate') },
+          h('input', {
+            className: 'tb-input',
+            type: 'date',
+            value: value.date,
+            onChange: (event) => patch({ date: event.target.value }),
+          })),
+        h('div', { key: 'times', className: 'tb-field-row' }, [
+          h(Field, { key: 'start', label: t('fieldStartTime') },
+            h('input', {
+              className: 'tb-input',
+              type: 'time',
+              step: 300,
+              value: value.startTime,
+              onChange: (event) => patch({ startTime: event.target.value }),
+            })),
+          h(Field, { key: 'end', label: t('fieldEndTime') },
+            h('input', {
+              className: 'tb-input',
+              type: 'time',
+              step: 300,
+              value: value.endTime,
+              onChange: (event) => patch({ endTime: event.target.value }),
+            })),
+        ]),
+        h(Field, { key: 'color', label: t('fieldColor') }, h('div', { className: 'tb-swatches' },
+          PALETTE.map((color) => h('button', {
+            key: color,
+            type: 'button',
+            className: 'tb-swatch',
+            'aria-label': color,
+            'data-on': value.color === color ? '1' : undefined,
+            style: { background: color },
+            onClick: () => patch({ color }),
+          })))),
+      ])
+    }
+
+    // --- dialog: long-term project -------------------------------------------
+
+    function ProjectDialog(props) {
+      const t = props.t
+      const [value, setValue] = React.useState(props.initial)
+      const [error, setError] = React.useState(null)
+      const patch = React.useCallback((part) => {
+        setValue((previous) => ({ ...previous, ...part }))
+      }, [])
+      const submit = () => {
+        const title = String(value.title || '').trim()
+        if (title === '') {
+          setError(t('errorTitle'))
+          return
+        }
+        if (!isDateKey(value.start) || !isDateKey(value.end)) {
+          setError(t('errorDates'))
+          return
+        }
+        if (daysBetween(value.start, value.end) < 0) {
+          setError(t('errorDates'))
+          return
+        }
+        props.onSave({
+          id: value.id,
+          title,
+          start: value.start,
+          end: value.end,
+          color: isColor(value.color) ? value.color : PALETTE[0],
+          note: typeof value.note === 'string' ? value.note.trim().slice(0, 500) : '',
+        })
+      }
+      const footer = [
+        props.mode === 'edit'
+          ? h(Btn, { key: 'del', variant: 'danger', onClick: () => props.onDelete(value.id) }, t('delete'))
+          : null,
+        h('span', { key: 'spacer', style: { flex: 1 } }),
+        h(Btn, { key: 'cancel', variant: 'quiet', onClick: props.onCancel }, t('cancel')),
+        h(Btn, { key: 'save', variant: 'primary', onClick: submit }, t('save')),
+      ].filter(Boolean)
+      return h(Modal, {
+        title: props.mode === 'edit' ? t('dialogEditProject') : t('dialogAddProject'),
+        closeLabel: t('close'),
+        onClose: props.onCancel,
+        footer,
+      }, [
+        error === null ? null : h('div', { key: 'err', className: 'tb-form-error', role: 'alert' }, error),
+        h(ProjectForm, { key: 'form', t, value, patch }),
+      ])
+    }
+
+    // --- dialog: daily task ---------------------------------------------------
+
+    function DailyDialog(props) {
+      const t = props.t
+      const [title, setTitle] = React.useState(props.initialTitle || '')
+      const [error, setError] = React.useState(null)
+      const submit = () => {
+        const clean = title.trim()
+        if (clean === '') {
+          setError(t('errorTitle'))
+          return
+        }
+        props.onSave(clean)
+      }
+      return h(Modal, {
+        title: props.mode === 'edit' ? t('dailyEdit') : t('dialogAddDaily'),
+        closeLabel: t('close'),
+        onClose: props.onCancel,
+        footer: [
+          h('span', { key: 'spacer', style: { flex: 1 } }),
+          h(Btn, { key: 'cancel', variant: 'quiet', onClick: props.onCancel }, t('cancel')),
+          h(Btn, { key: 'save', variant: 'primary', onClick: submit }, t('save')),
+        ],
+      }, [
+        error === null ? null : h('div', { key: 'err', className: 'tb-form-error', role: 'alert' }, error),
+        h(Field, { key: 'title', label: t('fieldTitle') }, h('input', {
+          className: 'tb-input',
+          type: 'text',
+          autoFocus: true,
+          maxLength: 200,
+          value: title,
+          placeholder: t('dailyAddPlaceholder'),
+          onChange: (event) => setTitle(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') submit()
+          },
+        })),
+      ])
+    }
+
+    // --- dialog: timed task ---------------------------------------------------
+
+    function SlotDialog(props) {
+      const t = props.t
+      const [value, setValue] = React.useState(props.initial)
+      const [error, setError] = React.useState(null)
+      const patch = React.useCallback((part) => {
+        setValue((previous) => ({ ...previous, ...part }))
+      }, [])
+      const submit = () => {
+        const title = String(value.title || '').trim()
+        if (title === '') {
+          setError(t('errorTitle'))
+          return
+        }
+        const start = minutesFromText(value.startTime)
+        const end = minutesFromText(value.endTime)
+        if (start === null || end === null || end <= start) {
+          setError(t('errorTime'))
+          return
+        }
+        if (!isDateKey(value.date)) {
+          setError(t('errorDates'))
+          return
+        }
+        props.onSave({
+          id: value.id,
+          title,
+          date: value.date,
+          start,
+          end,
+          color: isColor(value.color) ? value.color : PALETTE[0],
+        })
+      }
+      const footer = [
+        props.mode === 'edit'
+          ? h(Btn, {
+            key: 'del',
+            variant: 'danger',
+            onClick: () => props.onDelete(isDateKey(value.originDate) ? value.originDate : value.date, value.id),
+          }, t('delete'))
+          : null,
+        h('span', { key: 'spacer', style: { flex: 1 } }),
+        h(Btn, { key: 'cancel', variant: 'quiet', onClick: props.onCancel }, t('cancel')),
+        h(Btn, { key: 'save', variant: 'primary', onClick: submit }, t('save')),
+      ].filter(Boolean)
+      return h(Modal, {
+        title: props.mode === 'edit' ? t('dialogEditSlot') : t('dialogAddSlot'),
+        closeLabel: t('close'),
+        onClose: props.onCancel,
+        footer,
+      }, [
+        error === null ? null : h('div', { key: 'err', className: 'tb-form-error', role: 'alert' }, error),
+        h(SlotForm, { key: 'form', t, value, patch }),
+      ])
+    }
+
+    // --- AI extraction bar ----------------------------------------------------
+
+    function kindLabel(t, kind) {
+      if (kind === 'project') return t('kindProject')
+      if (kind === 'daily') return t('kindDaily')
+      return t('kindSlot')
+    }
+
+    function defaultTimeRange(startText) {
+      const start = minutesFromText(startText)
+      if (start === null) return { startTime: '09:00', endTime: '10:00' }
+      const end = clamp(start + 60, 0, 1439)
+      return { startTime: minutesText(start), endTime: minutesText(end) }
+    }
+
+    function draftFromTask(rawTask, index, today) {
+      const task = rawTask && typeof rawTask === 'object' ? rawTask : {}
+      const kind = task.kind === 'daily' || task.kind === 'slot' ? task.kind : 'project'
+      const title = typeof task.title === 'string' ? task.title : ''
+      const color = isColor(task.color) ? task.color : PALETTE[index % PALETTE.length]
+      const draft = {
+        key: uid('e'),
+        include: true,
+        kind,
+        title,
+        note: typeof task.note === 'string' ? task.note : '',
+        startDate: today,
+        endDate: today,
+        date: today,
+        startTime: '09:00',
+        endTime: '10:00',
+        color,
+        invalid: false,
+      }
+      if (kind === 'project') {
+        draft.startDate = isDateKey(task.startDate) ? task.startDate : today
+        draft.endDate = isDateKey(task.endDate) && daysBetween(draft.startDate, task.endDate) >= 0 ? task.endDate : draft.startDate
+      }
+      if (kind === 'slot') {
+        draft.date = isDateKey(task.date) ? task.date : today
+        const times = defaultTimeRange(task.startTime)
+        draft.startTime = minutesFromText(task.startTime) === null ? times.startTime : task.startTime
+        draft.endTime = minutesFromText(task.endTime) === null ? times.endTime : task.endTime
+        if (minutesFromText(draft.endTime) <= minutesFromText(draft.startTime)) draft.endTime = times.endTime
+      }
+      return draft
+    }
+
+    function ExtractionBar(props) {
+      const t = props.t
+      const [text, setText] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const [state, setState] = React.useState({ status: 'idle', items: [], source: null, warning: null, error: null })
+      const runExtract = () => {
+        const clean = text.trim()
+        if (busy || clean === '') return
+        setBusy(true)
+        setState({ status: 'idle', items: [], source: null, warning: null, error: null })
+        post('/extract', { text: clean, today: props.today }).then((data) => {
+          const tasks = Array.isArray(data.tasks) ? data.tasks : []
+          const items = tasks.slice(0, 20).map((task, index) => draftFromTask(task, index, props.today))
+          if (items.length === 0) {
+            setState({ status: 'empty', items: [], source: data.source || null, warning: data.warning || null, error: null })
+            return
+          }
+          setState({ status: 'ready', items, source: data.source || null, warning: data.warning || null, error: null })
+        }).catch((error) => {
+          const message = String((error && error.message) || error)
+          setState({
+            status: 'error',
+            items: [],
+            source: null,
+            warning: null,
+            error: /HTTP 40[45]/.test(message) ? t('hostMissing') : message,
+          })
+        }).then(() => {
+          setBusy(false)
+        })
+      }
+      const patchItem = React.useCallback((key, part) => {
+        setState((previous) => ({
+          ...previous,
+          items: previous.items.map((item) => (item.key === key ? { ...item, ...part } : item)),
+        }))
+      }, [])
+      const removeItem = React.useCallback((key) => {
+        setState((previous) => ({ ...previous, items: previous.items.filter((item) => item.key !== key) }))
+      }, [])
+      const discard = () => {
+        setState({ status: 'idle', items: [], source: null, warning: null, error: null })
+        setText('')
+      }
+      const confirm = () => {
+        const included = state.items.filter((item) => item.include)
+        if (included.length === 0) {
+          discard()
+          return
+        }
+        let invalid = false
+        const marked = state.items.map((item) => {
+          let bad = false
+          if (item.include) {
+            if (item.title.trim() === '') bad = true
+            if (item.kind === 'project' && (!isDateKey(item.startDate) || !isDateKey(item.endDate) || daysBetween(item.startDate, item.endDate) < 0)) bad = true
+            if (item.kind === 'slot') {
+              if (!isDateKey(item.date)) bad = true
+              const start = minutesFromText(item.startTime)
+              const end = minutesFromText(item.endTime)
+              if (start === null || end === null || end <= start) bad = true
+            }
+          }
+          if (bad) invalid = true
+          return { ...item, invalid: bad }
+        })
+        if (invalid) {
+          setState((previous) => ({ ...previous, items: marked, error: t('formInvalid') }))
+          return
+        }
+        const count = props.onApply(included)
+        discard()
+        props.onToast(t('extractAdded', count))
+      }
+      const renderRow = (item) => {
+        const fields = []
+        if (item.kind === 'project') {
+          fields.push(h('input', {
+            key: 'start',
+            className: 'tb-input tb-input-date',
+            type: 'date',
+            value: item.startDate,
+            'aria-label': t('fieldStart'),
+            onChange: (event) => patchItem(item.key, { startDate: event.target.value }),
+          }))
+          fields.push(h('span', { key: 'arrow', className: 'tb-hint' }, '→'))
+          fields.push(h('input', {
+            key: 'end',
+            className: 'tb-input tb-input-date',
+            type: 'date',
+            value: item.endDate,
+            'aria-label': t('fieldEnd'),
+            onChange: (event) => patchItem(item.key, { endDate: event.target.value }),
+          }))
+        }
+        if (item.kind === 'slot') {
+          fields.push(h('input', {
+            key: 'date',
+            className: 'tb-input tb-input-date',
+            type: 'date',
+            value: item.date,
+            'aria-label': t('fieldDate'),
+            onChange: (event) => patchItem(item.key, { date: event.target.value }),
+          }))
+          fields.push(h('input', {
+            key: 'start',
+            className: 'tb-input tb-input-time',
+            type: 'time',
+            step: 300,
+            value: item.startTime,
+            'aria-label': t('fieldStartTime'),
+            onChange: (event) => patchItem(item.key, { startTime: event.target.value }),
+          }))
+          fields.push(h('span', { key: 'arrow', className: 'tb-hint' }, '→'))
+          fields.push(h('input', {
+            key: 'end',
+            className: 'tb-input tb-input-time',
+            type: 'time',
+            step: 300,
+            value: item.endTime,
+            'aria-label': t('fieldEndTime'),
+            onChange: (event) => patchItem(item.key, { endTime: event.target.value }),
+          }))
+        }
+        if (item.kind === 'project' || item.kind === 'slot') {
+          fields.push(h('input', {
+            key: 'color',
+            className: 'tb-color',
+            type: 'color',
+            value: item.color,
+            'aria-label': t('fieldColor'),
+            onChange: (event) => patchItem(item.key, { color: event.target.value }),
+          }))
+        }
+        return h('div', {
+          key: item.key,
+          className: 'tb-erow',
+          'data-invalid': item.invalid ? '1' : undefined,
+        }, [
+          h('input', {
+            key: 'include',
+            className: 'tb-include',
+            type: 'checkbox',
+            checked: item.include,
+            'aria-label': t('save'),
+            onChange: (event) => patchItem(item.key, { include: event.target.checked }),
+          }),
+          h('select', {
+            key: 'kind',
+            className: 'tb-select',
+            value: item.kind,
+            'aria-label': t('extractTitle'),
+            onChange: (event) => patchItem(item.key, { kind: event.target.value }),
+          }, [
+            h('option', { key: 'project', value: 'project' }, t('kindProject')),
+            h('option', { key: 'daily', value: 'daily' }, t('kindDaily')),
+            h('option', { key: 'slot', value: 'slot' }, t('kindSlot')),
+          ]),
+          h('div', { key: 'main', className: 'tb-erow-main' }, h('input', {
+            className: 'tb-input tb-input-title',
+            type: 'text',
+            value: item.title,
+            maxLength: 200,
+            'aria-label': t('fieldTitle'),
+            onChange: (event) => patchItem(item.key, { title: event.target.value }),
+          })),
+          h('div', { key: 'fields', className: 'tb-erow-fields' }, fields),
+          h(IconBtn, { key: 'remove', title: t('delete'), onClick: () => removeItem(item.key) }, h(IconClose)),
+        ])
+      }
+      const result = state.status === 'ready'
+        ? h('div', { className: 'tb-extract-result' }, [
+          h('div', { key: 'head', className: 'tb-extract-result-head' }, [
+            h('span', { key: 'text' }, t('extractFound', state.items.length)),
+            state.source === 'fallback'
+              ? h('span', { key: 'src', className: 'tb-hint-warn' }, t('extractFallback'))
+              : null,
+            state.warning !== null ? h('span', { key: 'warn', className: 'tb-hint-warn' }, state.warning) : null,
+          ]),
+          h('div', { key: 'rows', style: { display: 'flex', flexDirection: 'column', gap: 8 } }, state.items.map(renderRow)),
+          h('div', { key: 'actions', className: 'tb-extract-actions' }, [
+            h(Btn, { key: 'ok', variant: 'primary', icon: h(IconCheck), onClick: confirm }, t('extractConfirm')),
+            h(Btn, { key: 'no', variant: 'quiet', onClick: discard }, t('extractCancel')),
+          ]),
+        ])
+        : null
+      return h('div', { className: 'tb-extract' }, [
+        h('div', { key: 'head', className: 'tb-extract-head' }, [
+          h('span', { key: 'label', className: 'tb-extract-label' }, [h(IconSpark, { key: 'i' }), h('span', { key: 't' }, t('extractTitle'))]),
+          h('span', { key: 'hint', className: 'tb-hint' }, t('extractHint')),
+        ]),
+        h('textarea', {
+          key: 'input',
+          className: 'tb-textarea',
+          rows: 2,
+          maxLength: 4000,
+          value: text,
+          placeholder: t('extractPlaceholder'),
+          onChange: (event) => setText(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) runExtract()
+          },
+        }),
+        h('div', { key: 'actions', className: 'tb-extract-actions' }, [
+          h(Btn, { key: 'run', variant: 'primary', disabled: busy || text.trim() === '', onClick: runExtract, icon: h(IconSpark) }, busy ? t('extractBusy') : t('extractRun')),
+          h(Btn, { key: 'clear', variant: 'quiet', disabled: busy, onClick: () => { setText(''); setState({ status: 'idle', items: [], source: null, warning: null, error: null }) } }, t('extractClear')),
+          busy ? h('span', { key: 'hint', className: 'tb-hint' }, t('extractHint')) : null,
+        ]),
+        state.status === 'empty' ? h('div', { key: 'empty', className: 'tb-hint' }, [
+          t('extractEmpty'),
+          state.warning !== null ? ` ${state.warning}` : '',
+        ]) : null,
+        state.error !== null && state.status !== 'ready' ? h('div', { key: 'error', className: 'tb-hint-error', role: 'alert' }, state.error) : null,
+        state.status === 'ready' && state.error !== null ? h('div', { key: 'rowerr', className: 'tb-hint-error', role: 'alert' }, state.error) : null,
+        result,
+        h('div', { key: 'add', className: 'tb-addrow' }, [
+          h(Btn, { key: 'p', icon: h(IconCalendar), onClick: () => props.onOpenAdd('project') }, t('addProject')),
+          h(Btn, { key: 'd', icon: h(IconTarget), onClick: () => props.onOpenAdd('daily') }, t('addDaily')),
+          h(Btn, { key: 's', icon: h(IconClock), onClick: () => props.onOpenAdd('slot') }, t('addSlot')),
+        ]),
+      ])
+    }
+
+    // --- calendar -------------------------------------------------------------
+
+    const LANE_H = 17
+
+    function MonthWeeks(props) {
+      const t = props.t
+      const week = props.week
+      const weekIndex = props.weekIndex
+      const data = props.data
+      const today = props.today
+      const selectedDate = props.selectedDate
+      const selectedId = props.selectedId
+      const setSelectedId = props.setSelectedId
+      const editingId = props.editingId
+      const setEditingId = props.setEditingId
+      const beginDrag = props.beginDrag
+      const onOpenDay = props.onOpenDay
+      const expanded = props.expanded
+      const onToggleExpanded = props.onToggleExpanded
+
+      const weekStart = week[0]
+      const weekEnd = week[6]
+      const segments = []
+      for (const project of data.projects) {
+        if (project.end < weekStart || project.start > weekEnd) continue
+        segments.push({
+          project,
+          startOffset: clamp(daysBetween(weekStart, project.start), 0, 6),
+          endOffset: clamp(daysBetween(weekStart, project.end), 0, 6),
+        })
+      }
+      segments.sort((a, b) => a.startOffset - b.startOffset || a.endOffset - b.endOffset)
+      const laneEnds = []
+      for (const segment of segments) {
+        let lane = -1
+        for (let index = 0; index < laneEnds.length; index += 1) {
+          if (laneEnds[index] < segment.startOffset) {
+            lane = index
+            break
+          }
+        }
+        if (lane === -1) {
+          lane = laneEnds.length
+          laneEnds.push(segment.endOffset)
+        } else {
+          laneEnds[lane] = segment.endOffset
+        }
+        segment.lane = lane
+      }
+      const laneCount = laneEnds.length
+      const collapsed = !expanded && laneCount > MAX_WEEK_LANES
+      const visibleLanes = collapsed ? MAX_WEEK_LANES : laneCount
+      const hiddenCount = collapsed ? segments.filter((segment) => segment.lane >= MAX_WEEK_LANES).length : 0
+
+      const dayCells = week.map((key, index) => {
+        const date = parseKey(key)
+        const isToday = key === today
+        const isSelected = key === selectedDate
+        const outside = date.getDate() === 1
+        const daySlotCount = slotsOn(data, key).length
+        return h('button', {
+          key,
+          type: 'button',
+          className: 'tb-day',
+          'data-today': isToday ? '1' : undefined,
+          'data-selected': isSelected ? '1' : undefined,
+          'data-outside': outside ? '1' : undefined,
+          title: `${key} · ${formatWeekday(key)}${daySlotCount > 0 ? ` · ${daySlotCount}` : ''}`,
+          onClick: () => props.setSelectedDate(key),
+          onDoubleClick: () => {
+            if (props.hasActive) props.onExitActive()
+            else onOpenDay(key)
+          },
+        }, [
+          h('span', { key: 'num', className: 'tb-day-num' }, String(date.getDate())),
+          outside ? h('span', { key: 'month', className: 'tb-day-month' }, monthShort(key)) : null,
+          isToday ? h('span', { key: 'dot', className: 'tb-day-today-mark', 'aria-hidden': 'true' }) : null,
+          daySlotCount > 0 ? h('span', { key: 'count', className: 'tb-day-count' }, `•${daySlotCount}`) : null,
+        ])
+      })
+
+      const bars = []
+      for (const segment of segments) {
+        if (collapsed && segment.lane >= MAX_WEEK_LANES) continue
+        const project = segment.project
+        const continuesLeft = project.start < weekStart
+        const continuesRight = project.end > weekEnd
+        const editing = editingId === project.id
+        // Elapsed part of this segment: every day before today, clipped to the
+        // columns this bar actually covers in this week.
+        const spanColumns = segment.endOffset - segment.startOffset + 1
+        const todayIndex = daysBetween(weekStart, today)
+        const pastEnd = clamp(
+          Math.min(segment.endOffset + 1, Math.max(0, Math.min(7, todayIndex))),
+          segment.startOffset,
+          segment.endOffset + 1,
+        )
+        const pastColumns = Math.max(0, pastEnd - segment.startOffset)
+        // The elapsed band's own head and tail get round caps where they really
+        // are visible: the project's start, and yesterday (or the project's end
+        // when it already finished). Fully elapsed weeks in between stay square so
+        // the band reads as one continuous strip, not a row of pills.
+        const elapsedTail = addDays(today, -1)
+        const tailKey = project.end < elapsedTail ? project.end : elapsedTail
+        const headRounded = pastColumns > 0 && project.start >= weekStart
+        const tailRounded = pastColumns > 0 && tailKey >= weekStart && tailKey <= weekEnd
+        bars.push(h('div', {
+          key: project.id,
+          className: 'tb-bar',
+          'data-selected': selectedId === project.id ? '1' : undefined,
+          'data-editing': editing ? '1' : undefined,
+          role: 'button',
+          tabIndex: 0,
+          title: `${project.title} · ${project.start} → ${project.end}`,
+          style: {
+            left: `calc(${(segment.startOffset / 7) * 100}% + 1px)`,
+            width: `calc(${((segment.endOffset - segment.startOffset + 1) / 7) * 100}% - 2px)`,
+            top: `${segment.lane * LANE_H}px`,
+            background: project.color,
+            color: '#FFFFFF',
+            borderRadius: `${continuesLeft ? 0 : 8}px ${continuesRight ? 0 : 8}px ${continuesRight ? 0 : 8}px ${continuesLeft ? 0 : 8}px`,
+          },
+          onClick: (event) => {
+            event.stopPropagation()
+            if (editingId !== null && editingId !== project.id) setEditingId(null)
+            setSelectedId(project.id)
+          },
+          onDoubleClick: (event) => {
+            event.stopPropagation()
+            setSelectedId(project.id)
+            setEditingId(editing ? null : project.id)
+          },
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              setSelectedId(project.id)
+            }
+          },
+          onPointerDown: (event) => {
+            if (editingId !== project.id) return
+            beginDrag(event, project, 'move')
+          },
+        }, [
+          pastColumns > 0 ? h('span', {
+            key: 'past',
+            className: 'tb-bar-past',
+            style: {
+              width: `${(pastColumns / spanColumns) * 100}%`,
+              borderRadius: `${headRounded ? 8 : 0}px ${tailRounded ? 8 : 0}px ${tailRounded ? 8 : 0}px ${headRounded ? 8 : 0}px`,
+              // Bold outline: the band's long edges are always stroked; end caps
+              // are stroked only where the elapsed band really starts/ends, so a
+              // middle week does not get a fake vertical seam.
+              borderLeft: headRounded ? '2px solid rgba(255,255,255,.72)' : '0',
+              borderRight: tailRounded ? '2px solid rgba(255,255,255,.72)' : '0',
+            },
+            'aria-hidden': 'true',
+          }) : null,
+          h('span', { key: 'title', className: 'tb-bar-title' }, project.title),
+          editing ? h('span', {
+            key: 'start',
+            className: 'tb-bar-handle tb-bar-handle-start',
+            'aria-hidden': 'true',
+            onPointerDown: (event) => beginDrag(event, project, 'start'),
+          }) : null,
+          editing ? h('span', {
+            key: 'end',
+            className: 'tb-bar-handle tb-bar-handle-end',
+            'aria-hidden': 'true',
+            onPointerDown: (event) => beginDrag(event, project, 'end'),
+          }) : null,
+        ]))
+      }
+
+      const row = h('div', {
+        className: 'tb-week',
+        'data-even': props.even ? '1' : undefined,
+        'data-month-start': props.monthStart ? '1' : undefined,
+      }, [
+        h('div', { key: 'days', className: 'tb-week-days' }, dayCells),
+        h('div', { key: 'lanes', className: 'tb-lanes', style: { height: `${visibleLanes * LANE_H}px` } }, bars),
+        hiddenCount > 0 ? h('button', {
+          key: 'more',
+          type: 'button',
+          className: 'tb-more',
+          onClick: onToggleExpanded,
+        }, t('moreTasks', hiddenCount)) : null,
+        !collapsed && laneCount > MAX_WEEK_LANES ? h('button', {
+          key: 'less',
+          type: 'button',
+          className: 'tb-more',
+          onClick: onToggleExpanded,
+        }, t('lessTasks')) : null,
+      ])
+      return row
+    }
+
+    function CalendarSection(props) {
+      const t = props.t
+      const data = props.data
+      const update = props.update
+      const today = props.today
+      const selectedDate = props.selectedDate
+      const setSelectedDate = props.setSelectedDate
+      const onOpenDay = props.onOpenDay
+      const onEditProject = props.onEditProject
+      const showToast = props.showToast
+
+      const [selectedId, setSelectedId] = React.useState(null)
+      const [editingId, setEditingId] = React.useState(null)
+      const [expandedWeeks, setExpandedWeeks] = React.useState(() => new Set())
+      const [drag, setDrag] = React.useState(null)
+      const dragRef = React.useRef(null)
+
+      const firstMonth = startOfMonth(props.cursor)
+      const secondMonth = startOfMonth(addMonths(firstMonth, 1))
+      const rangeStart = startOfWeek(firstMonth)
+      const rangeEnd = addDays(startOfWeek(endOfMonth(secondMonth)), 6)
+      const weeks = []
+      let cursor = rangeStart
+      while (daysBetween(cursor, rangeEnd) >= 0 && weeks.length < 12) {
+        weeks.push(Array.from({ length: 7 }, (unused, index) => addDays(cursor, index)))
+        cursor = addDays(cursor, 7)
+      }
+
+      React.useEffect(() => {
+        if (drag === null) return undefined
+        const move = (event) => {
+          const current = dragRef.current
+          if (current === null) return
+          let delta = Math.round((event.clientX - current.startX) / current.dayWidth)
+          if (current.mode === 'move') {
+            // Keep at least part of the bar inside the rendered two-month range;
+            // a task dragged completely off the grid would look deleted.
+            const minDelta = daysBetween(current.origEnd, rangeStart)
+            const maxDelta = daysBetween(current.origStart, rangeEnd)
+            delta = minDelta > maxDelta ? 0 : clamp(delta, minDelta, maxDelta)
+          } else if (current.mode === 'start') {
+            delta = Math.min(delta, daysBetween(current.origStart, rangeEnd))
+          } else {
+            delta = Math.max(delta, daysBetween(current.origEnd, rangeStart))
+          }
+          if (delta === current.lastDelta) return
+          current.lastDelta = delta
+          if (current.mode === 'move') {
+            update((store) => patchProject(store, current.id, {
+              start: addDays(current.origStart, delta),
+              end: addDays(current.origEnd, delta),
+            }))
+            return
+          }
+          if (current.mode === 'start') {
+            const next = daysBetween(addDays(current.origStart, delta), current.origEnd) < 0
+              ? current.origEnd
+              : addDays(current.origStart, delta)
+            update((store) => patchProject(store, current.id, { start: next }))
+            return
+          }
+          const next = daysBetween(current.origStart, addDays(current.origEnd, delta)) < 0
+            ? current.origStart
+            : addDays(current.origEnd, delta)
+          update((store) => patchProject(store, current.id, { end: next }))
+        }
+        const finish = () => {
+          dragRef.current = null
+          setDrag(null)
+        }
+        window.addEventListener('pointermove', move)
+        window.addEventListener('pointerup', finish)
+        window.addEventListener('pointercancel', finish)
+        return () => {
+          window.removeEventListener('pointermove', move)
+          window.removeEventListener('pointerup', finish)
+          window.removeEventListener('pointercancel', finish)
+        }
+      }, [drag, update])
+
+      React.useEffect(() => {
+        if (selectedId === null && editingId === null) return undefined
+        // Leave the selected / drag state on a double-click on any empty area of
+        // the page (task lines, the action bar and dialogs keep their own
+        // behavior), or on Escape.
+        const exit = (event) => {
+          const target = event.target
+          if (target && target.closest) {
+            if (target.closest('.tb-bar') || target.closest('.tb-modal') || target.closest('.tb-overlay')) return
+          }
+          setSelectedId(null)
+          setEditingId(null)
+        }
+        const onKey = (event) => {
+          if (event.key === 'Escape') {
+            setSelectedId(null)
+            setEditingId(null)
+          }
+        }
+        window.addEventListener('dblclick', exit)
+        window.addEventListener('keydown', onKey)
+        return () => {
+          window.removeEventListener('dblclick', exit)
+          window.removeEventListener('keydown', onKey)
+        }
+      }, [selectedId, editingId])
+
+      const beginDrag = React.useCallback((event, project, mode) => {
+        if (typeof event.button === 'number' && event.button !== 0) return
+        event.preventDefault()
+        event.stopPropagation()
+        const row = event.currentTarget && event.currentTarget.closest ? event.currentTarget.closest('.tb-week') : null
+        const rect = row ? row.getBoundingClientRect() : null
+        const dayWidth = rect && rect.width > 0 ? rect.width / 7 : 120
+        const current = {
+          id: project.id,
+          mode,
+          startX: event.clientX,
+          origStart: project.start,
+          origEnd: project.end,
+          dayWidth,
+          lastDelta: 0,
+        }
+        dragRef.current = current
+        setDrag(current)
+      }, [])
+
+      const selected = data.projects.find((project) => project.id === selectedId) || null
+      const isEditing = selected !== null && editingId === selected.id
+      /** Leave the selected/drag state entirely (double-click on empty space). */
+      const clearActive = React.useCallback(() => {
+        setSelectedId(null)
+        setEditingId(null)
+      }, [])
+      const actionBar = selected === null ? null : h('div', { className: 'tb-card-actions' }, [
+        h('span', { key: 'info', className: 'tb-card-sub' }, `${t('projectSelected')}${selected.title} · ${selected.start} → ${selected.end}`),
+        isEditing
+          ? h(Btn, { key: 'done', variant: 'primary', onClick: () => setEditingId(null) }, t('projectDragDone'))
+          : h(Btn, { key: 'drag', onClick: () => setEditingId(selected.id) }, t('projectDrag')),
+        h(Btn, { key: 'edit', onClick: () => onEditProject(selected) }, t('projectEdit')),
+        h(Btn, {
+          key: 'delete',
+          variant: 'danger',
+          onClick: () => {
+            if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(t('confirmDelete'))) return
+            update((store) => withoutProject(store, selected.id))
+            setSelectedId(null)
+            setEditingId(null)
+            showToast(t('saved'))
+          },
+        }, t('projectDelete')),
+        h(Btn, { key: 'clear', variant: 'quiet', onClick: () => { setSelectedId(null); setEditingId(null) } }, t('projectCancel')),
+      ])
+
+      return h('section', { className: 'tb-card' }, [
+        h('div', { key: 'head', className: 'tb-card-head' }, [
+          h('span', { key: 'title', className: 'tb-card-title' }, [h(IconCalendar, { key: 'i' }), h('span', { key: 't' }, t('calendar'))]),
+          h('span', { key: 'sub', className: 'tb-card-sub' }, t('calendarHint')),
+          h('div', { key: 'nav', className: 'tb-card-actions' }, [
+            h('span', { key: 'label', className: 'tb-nav-label' }, t('monthRange', monthText(firstMonth), monthText(secondMonth))),
+            h(IconBtn, { key: 'prev', title: t('monthPrev'), onClick: () => props.setCursor(addMonths(firstMonth, -1)) }, h(IconChevron, { dir: 'left' })),
+            h(Btn, { key: 'today', variant: 'quiet', onClick: () => props.setCursor(today) }, t('today')),
+            h(IconBtn, { key: 'next', title: t('monthNext'), onClick: () => props.setCursor(addMonths(firstMonth, 1)) }, h(IconChevron, { dir: 'right' })),
+          ]),
+        ]),
+        actionBar === null ? null : h('div', {
+          key: 'selbar',
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            padding: '6px 14px',
+            borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.18))',
+            background: 'var(--dsw-alias-bg-layer-2)',
+          },
+        }, actionBar),
+        isEditing ? h('div', { key: 'draghint', className: 'tb-hint', style: { padding: '6px 14px 0' } }, t('dragModeHint')) : null,
+        h('div', { key: 'cal', className: 'tb-cal' }, [
+          h('div', { key: 'weekhead', className: 'tb-cal-weekhead' },
+            [0, 1, 2, 3, 4, 5, 6].map((index) => h('span', { key: index }, formatWeekday(addDays(rangeStart, index))))),
+          weeks.map((week, weekIndex) => h(MonthWeeks, {
+            key: week[0],
+            t,
+            week,
+            weekIndex,
+            data,
+            today,
+            selectedDate,
+            setSelectedDate,
+            selectedId,
+            setSelectedId,
+            editingId,
+            setEditingId,
+            beginDrag,
+            onOpenDay,
+            hasActive: selectedId !== null || editingId !== null,
+            onExitActive: clearActive,
+            even: weekIndex % 2 === 1,
+            monthStart: weekIndex > 0 && week.some((key) => parseKey(key).getDate() === 1),
+            expanded: expandedWeeks.has(week[0]),
+            onToggleExpanded: () => setExpandedWeeks((previous) => {
+              const next = new Set(previous)
+              if (next.has(week[0])) next.delete(week[0])
+              else next.add(week[0])
+              return next
+            }),
+          })),
+        ]),
+      ])
+    }
+
+    // --- daily recurring tasks ------------------------------------------------
+
+    function DailySection(props) {
+      const t = props.t
+      const data = props.data
+      const update = props.update
+      const showToast = props.showToast
+      const today = props.today
+      const [editing, setEditing] = React.useState(false)
+      const [draft, setDraft] = React.useState('')
+
+      const addTask = () => {
+        const title = draft.trim()
+        if (title === '') return
+        update((store) => withDailyTask(store, title))
+        setDraft('')
+        showToast(t('saved'))
+      }
+
+      const rows = data.dailyTasks.map((task) => {
+        const done = task.doneDates.includes(today)
+        return h('li', { key: task.id, className: 'tb-mditem', 'data-done': done ? '1' : undefined }, [
+          h('button', {
+            key: 'check',
+            type: 'button',
+            className: 'tb-checkbox',
+            'data-checked': done ? '1' : undefined,
+            title: t('dailyToggle', done),
+            'aria-label': t('dailyToggle', done),
+            'aria-pressed': done ? 'true' : 'false',
+            onClick: () => update((store) => toggleDailyDone(store, task.id, today)),
+          }, done ? h(IconCheck, { key: 'icon', size: 13 }) : null),
+          h('span', { key: 'title', className: 'tb-mdtitle' }, task.title),
+          editing ? h('button', {
+            key: 'rename',
+            type: 'button',
+            className: 'tb-md-edit',
+            title: t('projectEdit'),
+            'aria-label': t('projectEdit'),
+            onClick: () => props.onEditDaily(task),
+          }, '✎') : null,
+          editing ? h('button', {
+            key: 'del',
+            type: 'button',
+            className: 'tb-md-edit',
+            title: t('dailyDelete'),
+            'aria-label': t('dailyDelete'),
+            onClick: () => update((store) => withoutDailyTask(store, task.id)),
+          }, '✕') : null,
+        ])
+      })
+
+      return h('section', { className: 'tb-card' }, [
+        h('div', { key: 'head', className: 'tb-card-head' }, [
+          h('span', { key: 'title', className: 'tb-card-title' }, [h(IconTarget, { key: 'i' }), h('span', { key: 't' }, t('daily'))]),
+          h('span', { key: 'count', className: 'tb-card-sub' }, t('dailyCount', data.dailyTasks.length)),
+          h('span', { key: 'hint', className: 'tb-hint' }, t('dailyHint')),
+          h('div', { key: 'actions', className: 'tb-card-actions' }, [
+            h(Btn, { key: 'edit', onClick: () => setEditing((value) => !value) }, editing ? t('editDone') : t('dailyEdit')),
+          ]),
+        ]),
+        h('div', { key: 'body', className: 'tb-daily-body' }, [
+          data.dailyTasks.length === 0
+            ? h('div', { key: 'empty', className: 'tb-empty' }, t('dailyEmpty'))
+            : h('ul', { key: 'list', className: 'tb-mdlist tb-daily-grid' }, rows),
+          editing ? h('div', { key: 'add', className: 'tb-daily-add' }, [
+            h('input', {
+              key: 'input',
+              className: 'tb-input',
+              type: 'text',
+              maxLength: 200,
+              value: draft,
+              placeholder: t('dailyAddPlaceholder'),
+              onChange: (event) => setDraft(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') addTask()
+              },
+            }),
+            h(Btn, { key: 'btn', variant: 'primary', onClick: addTask, icon: h(IconPlus) }, t('dailyAdd')),
+          ]) : null,
+        ]),
+      ])
+    }
+
+    // --- weekly task list (7 columns) ----------------------------------------
+
+    function WeekView(props) {
+      const t = props.t
+      const data = props.data
+      const update = props.update
+      const today = props.today
+      const weekStart = props.weekStart
+      const setWeekStart = props.setWeekStart
+      const setSelectedDate = props.setSelectedDate
+      const onOpenDay = props.onOpenDay
+      const end = addDays(weekStart, 6)
+
+      const doneCheck = (checked, label, onToggle) => h('button', {
+        key: 'check',
+        type: 'button',
+        className: 'tb-checkbox tb-checkbox-sm',
+        'data-checked': checked ? '1' : undefined,
+        title: label,
+        'aria-label': label,
+        'aria-pressed': checked ? 'true' : 'false',
+        onPointerDown: (event) => event.stopPropagation(),
+        onClick: (event) => {
+          event.stopPropagation()
+          onToggle()
+        },
+      }, checked ? h(IconCheck, { key: 'icon', size: 10 }) : null)
+
+      const columns = Array.from({ length: 7 }, (unused, index) => addDays(weekStart, index)).map((key) => {
+        const isPast = key < today
+        const isToday = key === today
+        const slots = slotsOn(data, key)
+        const projects = projectsOn(data, key)
+        const rows = []
+        for (const slot of slots) {
+          rows.push(h('div', {
+            key: `s-${slot.id}`,
+            className: 'tb-wtask',
+            'data-done': slot.done ? '1' : undefined,
+            onClick: () => setSelectedDate(key),
+          }, [
+            doneCheck(slot.done === true, t('slotDone'), () => {
+              update((store) => patchSlot(store, key, slot.id, { done: slot.done !== true }))
+            }),
+            h('span', { key: 'time', className: 'tb-wtask-time' }, minutesText(slot.start)),
+            h('span', { key: 'title', className: 'tb-wtask-title', title: `${minutesText(slot.start)}–${minutesText(slot.end)} ${slot.title}` }, slot.title),
+          ]))
+        }
+        for (const project of projects) {
+          rows.push(h('div', {
+            key: `p-${project.id}`,
+            className: 'tb-wtask',
+            'data-done': project.done ? '1' : undefined,
+            onClick: () => setSelectedDate(key),
+          }, [
+            doneCheck(project.done === true, t('slotDone'), () => {
+              update((store) => toggleProjectDone(store, project.id))
+            }),
+            h('span', { key: 'dot', className: 'tb-wdot', style: { background: project.color } }),
+            h('span', { key: 'title', className: 'tb-wtask-title', title: `${project.title} · ${project.start} → ${project.end}` }, project.title),
+          ]))
+        }
+        return h('div', {
+          key,
+          className: 'tb-wcol',
+          'data-past': isPast ? '1' : undefined,
+          'data-today': isToday ? '1' : undefined,
+        }, [
+          h('button', {
+            key: 'head',
+            type: 'button',
+            className: 'tb-wcol-head',
+            title: `${formatDay(key)} ${formatWeekday(key)}`,
+            onClick: () => {
+              setSelectedDate(key)
+              onOpenDay(key)
+            },
+          }, [
+            h('span', { key: 'w', className: 'tb-wcol-head-date' }, formatWeekday(key)),
+            h('span', { key: 'd', className: 'tb-wcol-head-date' }, formatDay(key)),
+          ]),
+          h('div', { key: 'body', className: 'tb-wcol-body' }, rows.length === 0
+            ? h('span', { key: 'empty', className: 'tb-wempty' }, t('emptyWeekCol'))
+            : rows),
+        ])
+      })
+
+      return h(React.Fragment, null, [
+        h('div', { key: 'nav', className: 'tb-daybar' }, [
+          h('span', { key: 'title', className: 'tb-card-title' }, [h(IconList, { key: 'i' }), h('span', { key: 't' }, t('workWeek'))]),
+          h('div', { key: 'pager', className: 'tb-nav' }, [
+            h(IconBtn, { key: 'prev', title: t('weekPrev'), onClick: () => setWeekStart(addDays(weekStart, -7)) }, h(IconChevron, { dir: 'left' })),
+            h('span', { key: 'label', className: 'tb-nav-label' }, t('weekRange', formatDay(weekStart), formatDay(end))),
+            h(IconBtn, { key: 'next', title: t('weekNext'), onClick: () => setWeekStart(addDays(weekStart, 7)) }, h(IconChevron, { dir: 'right' })),
+            h(Btn, { key: 'today', variant: 'quiet', onClick: () => setWeekStart(startOfWeek(today)) }, t('today')),
+          ]),
+          h('span', { key: 'hint', className: 'tb-hint' }, t('calendarHint')),
+        ]),
+        h('div', { key: 'grid', className: 'tb-weekgrid' }, columns),
+      ])
+    }
+
+    // --- 24-hour timeline -----------------------------------------------------
+
+    function layoutSlots(slots) {
+      const sorted = slots.slice().sort((a, b) => a.start - b.start || a.end - b.end)
+      const items = []
+      let cluster = []
+      let laneEnds = []
+      let clusterEnd = 0
+      const flush = () => {
+        const laneCount = cluster.reduce((max, item) => Math.max(max, item.lane + 1), 0)
+        for (const item of cluster) item.lanes = Math.max(1, laneCount)
+        cluster = []
+        laneEnds = []
+        clusterEnd = 0
+      }
+      for (const slot of sorted) {
+        if (cluster.length > 0 && slot.start >= clusterEnd) flush()
+        let lane = -1
+        for (let index = 0; index < laneEnds.length; index += 1) {
+          if (laneEnds[index] <= slot.start) {
+            lane = index
+            break
+          }
+        }
+        if (lane === -1) {
+          lane = laneEnds.length
+          laneEnds.push(slot.end)
+        } else {
+          laneEnds[lane] = slot.end
+        }
+        const item = { slot, lane, lanes: 1 }
+        cluster.push(item)
+        items.push(item)
+        clusterEnd = Math.max(clusterEnd, slot.end)
+      }
+      flush()
+      return items
+    }
+
+    function DayTimeline(props) {
+      const t = props.t
+      const slots = props.slots
+      const date = props.date
+      const today = props.today
+      const [drag, setDrag] = React.useState(null)
+      const [tip, setTip] = React.useState(null)
+      const dragRef = React.useRef(null)
+      const suppressClickRef = React.useRef(false)
+      const suppressTimerRef = React.useRef(null)
+      const contentRef = React.useRef(null)
+      const handlersRef = React.useRef(props)
+      handlersRef.current = props
+
+      const startDrag = (event, slot, mode) => {
+        if (typeof event.button === 'number' && event.button !== 0) return
+        event.preventDefault()
+        event.stopPropagation()
+        const rect = contentRef.current ? contentRef.current.getBoundingClientRect() : null
+        const height = rect && rect.height > 0 ? rect.height : TL_H
+        const current = {
+          id: slot.id,
+          mode,
+          startY: event.clientY,
+          origStart: slot.start,
+          origEnd: slot.end,
+          pxPerMin: height / 1440,
+          preview: { start: slot.start, end: slot.end },
+        }
+        dragRef.current = current
+        setDrag({ ...current, x: event.clientX, y: event.clientY })
+        setTip({ x: event.clientX, y: event.clientY, text: `${minutesText(slot.start)} – ${minutesText(slot.end)}` })
+      }
+
+      const dragging = drag !== null
+      React.useEffect(() => {
+        if (!dragging) return undefined
+        const move = (event) => {
+          const current = dragRef.current
+          if (current === null) return
+          const delta = Math.round((event.clientY - current.startY) / current.pxPerMin / SNAP) * SNAP
+          let start = current.origStart
+          let end = current.origEnd
+          if (current.mode === 'move') {
+            const duration = current.origEnd - current.origStart
+            // 1440 is a legal stored end; clamping to MAX_END here would shrink a
+            // legacy 23:59–24:00 block on the first delta-0 drag.
+            start = clamp(current.origStart + delta, 0, Math.max(0, 1440 - duration))
+            end = start + duration
+          } else if (current.mode === 'start') {
+            // A slot shorter than one snap unit must not produce a negative bound
+            // (`clamp` returns its high bound), which the host sanitizer would drop.
+            start = clamp(current.origStart + delta, 0, Math.max(0, current.origEnd - SNAP))
+          } else {
+            end = clamp(current.origEnd + delta, current.origStart + SNAP, MAX_END)
+          }
+          if (!(end > start)) return
+          if (start === current.preview.start && end === current.preview.end) {
+            setTip({ x: event.clientX, y: event.clientY, text: `${minutesText(start)} – ${minutesText(end)}` })
+            return
+          }
+          current.preview = { start, end }
+          setDrag({ ...current, x: event.clientX, y: event.clientY })
+          setTip({ x: event.clientX, y: event.clientY, text: `${minutesText(start)} – ${minutesText(end)}` })
+        }
+        const finish = () => {
+          const current = dragRef.current
+          dragRef.current = null
+          setDrag(null)
+          setTip(null)
+          if (current !== null && current.preview.end > current.preview.start && (current.preview.start !== current.origStart || current.preview.end !== current.origEnd)) {
+            suppressClickRef.current = true
+            if (suppressTimerRef.current !== null) clearTimeout(suppressTimerRef.current)
+            suppressTimerRef.current = setTimeout(() => {
+              suppressClickRef.current = false
+              suppressTimerRef.current = null
+            }, 150)
+            handlersRef.current.onChangeSlot(current.id, current.preview)
+          }
+        }
+        window.addEventListener('pointermove', move)
+        window.addEventListener('pointerup', finish)
+        window.addEventListener('pointercancel', finish)
+        return () => {
+          window.removeEventListener('pointermove', move)
+          window.removeEventListener('pointerup', finish)
+          window.removeEventListener('pointercancel', finish)
+        }
+      }, [dragging])
+
+      const addAt = (event) => {
+        if (event.target !== event.currentTarget) return
+        const rect = contentRef.current ? contentRef.current.getBoundingClientRect() : null
+        if (rect === null || rect.height <= 0) return
+        const raw = ((event.clientY - rect.top) / rect.height) * 1440
+        const start = clamp(Math.floor(raw / SNAP) * SNAP, 0, LAST_SNAP)
+        const end = Math.min(start + 60, MAX_END)
+        props.onCreateSlot(start, end)
+      }
+
+      const hourCells = []
+      for (let hour = 0; hour < 24; hour += 1) {
+        hourCells.push(h('div', {
+          key: hour,
+          className: 'tb-tl-hour',
+          style: { height: `${HOUR_H}px` },
+        }, hour === 0 ? null : h('span', { key: 'label', className: 'tb-tl-hour-label' }, `${pad2(hour)}:00`)))
+      }
+      const gridLines = []
+      for (let hour = 0; hour < 24; hour += 1) {
+        gridLines.push(h('div', { key: hour, className: 'tb-tl-line', style: { height: `${HOUR_H}px` } }))
+      }
+
+      const laidOut = layoutSlots(slots)
+      const blocks = laidOut.map((item) => {
+        const slot = item.slot
+        const active = drag !== null && drag.id === slot.id
+        const start = active ? drag.preview.start : slot.start
+        const end = active ? drag.preview.end : slot.end
+        const top = (start / 1440) * TL_H
+        const natural = Math.max(15, ((end - start) / 1440) * TL_H - 2)
+        const height = Math.max(4, Math.min(natural, TL_H - top - 1))
+        const width = 100 / item.lanes
+        return h('div', {
+          key: slot.id,
+          className: 'tb-slot',
+          'data-drag': active ? '1' : undefined,
+          'data-done': slot.done ? '1' : undefined,
+          style: {
+            top: `${top}px`,
+            height: `${height}px`,
+            left: `calc(${item.lane * width}% + 2px)`,
+            width: `calc(${width}% - 4px)`,
+            background: slot.color,
+            color: readableOn(slot.color),
+          },
+          title: `${slot.title} · ${minutesText(start)} – ${minutesText(end)}`,
+          onPointerDown: (event) => startDrag(event, slot, 'move'),
+          onClick: (event) => {
+            if (suppressClickRef.current) {
+              suppressClickRef.current = false
+              return
+            }
+            props.onOpenSlot(slot)
+          },
+        }, [
+          h('span', {
+            key: 'start',
+            className: 'tb-slot-handle tb-slot-handle-top',
+            'aria-hidden': 'true',
+            onPointerDown: (event) => startDrag(event, slot, 'start'),
+          }),
+          h('span', { key: 'title', className: 'tb-slot-title' }, slot.title),
+          height >= 32 ? h('span', { key: 'time', className: 'tb-slot-time' }, `${minutesText(start)} – ${minutesText(end)}`) : null,
+          h('button', {
+            key: 'done',
+            type: 'button',
+            className: 'tb-slot-done',
+            title: t('slotDone'),
+            'aria-label': t('slotDone'),
+            'aria-pressed': slot.done ? 'true' : 'false',
+            onClick: (event) => {
+              event.stopPropagation()
+              props.onToggleSlot(slot)
+            },
+            onPointerDown: (event) => {
+              event.stopPropagation()
+            },
+          }, slot.done ? '✓' : ''),
+          h('span', {
+            key: 'end',
+            className: 'tb-slot-handle tb-slot-handle-bottom',
+            'aria-hidden': 'true',
+            onPointerDown: (event) => startDrag(event, slot, 'end'),
+          }),
+        ])
+      })
+
+      const now = new Date()
+      const nowMinutes = now.getHours() * 60 + now.getMinutes()
+      const showNow = date === today
+
+      return h('div', { className: 'tb-timeline' }, [
+        h('div', { key: 'hours', className: 'tb-tl-hours' }, hourCells),
+        h('div', {
+          key: 'content',
+          className: 'tb-tl-content',
+          ref: contentRef,
+          style: { height: `${TL_H}px` },
+          onDoubleClick: addAt,
+        }, [
+          h('div', { key: 'lines', className: 'tb-tl-lines' }, gridLines),
+          blocks,
+          showNow ? h('div', { key: 'now', className: 'tb-tl-now', style: { top: `${(nowMinutes / 1440) * TL_H}px` } }) : null,
+        ]),
+        tip === null ? null : h('div', {
+          key: 'tip',
+          className: 'tb-dragtip',
+          style: { left: `${tip.x + 14}px`, top: `${tip.y - 26}px` },
+        }, tip.text),
+      ])
+    }
+
+    // --- day view -------------------------------------------------------------
+
+    function DayView(props) {
+      const t = props.t
+      const data = props.data
+      const update = props.update
+      const date = props.date
+      const setDate = props.setDate
+      const today = props.today
+      const showToast = props.showToast
+      const slots = slotsOn(data, date)
+
+      const dailyRows = data.dailyTasks.map((task) => {
+        const done = task.doneDates.includes(date)
+        return h('li', { key: task.id, className: 'tb-mditem', 'data-done': done ? '1' : undefined }, [
+          h('button', {
+            key: 'check',
+            type: 'button',
+            className: 'tb-checkbox',
+            'data-checked': done ? '1' : undefined,
+            title: t('dailyToggle', done),
+            'aria-label': t('dailyToggle', done),
+            'aria-pressed': done ? 'true' : 'false',
+            onClick: () => update((store) => toggleDailyDone(store, task.id, date)),
+          }, done ? h(IconCheck, { key: 'icon', size: 13 }) : null),
+          h('span', { key: 'title', className: 'tb-mdtitle' }, task.title),
+        ])
+      })
+
+      const changeSlot = (id, preview) => {
+        if (!(preview.end > preview.start)) return
+        update((store) => patchSlot(store, date, id, { start: preview.start, end: preview.end }))
+      }
+      const toggleSlot = (slot) => {
+        update((store) => patchSlot(store, date, slot.id, { done: !slot.done }))
+      }
+
+      const dayProjects = projectsOn(data, date)
+      const taskDoneCheck = (checked, onToggle) => h('button', {
+        key: 'check',
+        type: 'button',
+        className: 'tb-checkbox tb-checkbox-sm',
+        'data-checked': checked ? '1' : undefined,
+        title: t('slotDone'),
+        'aria-label': t('slotDone'),
+        'aria-pressed': checked ? 'true' : 'false',
+        onPointerDown: (event) => event.stopPropagation(),
+        onClick: (event) => {
+          event.stopPropagation()
+          onToggle()
+        },
+      }, checked ? h(IconCheck, { key: 'icon', size: 10 }) : null)
+      const taskRows = []
+      for (const slot of slots) {
+        taskRows.push(h('div', {
+          key: `s-${slot.id}`,
+          className: 'tb-daytask',
+          'data-done': slot.done ? '1' : undefined,
+          title: `${minutesText(slot.start)}–${minutesText(slot.end)} ${slot.title}`,
+          onClick: () => props.onEditSlot(date, slot),
+        }, [
+          taskDoneCheck(slot.done === true, () => toggleSlot(slot)),
+          h('span', { key: 'time', className: 'tb-wtask-time' }, minutesText(slot.start)),
+          h('span', { key: 'title', className: 'tb-wtask-title' }, slot.title),
+        ]))
+      }
+      for (const project of dayProjects) {
+        taskRows.push(h('div', {
+          key: `p-${project.id}`,
+          className: 'tb-daytask',
+          'data-done': project.done ? '1' : undefined,
+          title: `${project.title} · ${project.start} → ${project.end}`,
+        }, [
+          taskDoneCheck(project.done === true, () => update((store) => toggleProjectDone(store, project.id))),
+          h('span', { key: 'dot', className: 'tb-wdot', style: { background: project.color } }),
+          h('span', { key: 'title', className: 'tb-wtask-title' }, project.title),
+        ]))
+      }
+
+      return h(React.Fragment, null, [
+        h('div', { key: 'bar', className: 'tb-daybar' }, [
+          h('span', { key: 'title', className: 'tb-card-title' }, [h(IconClock, { key: 'i' }), h('span', { key: 't' }, t('workDay'))]),
+          h('div', { key: 'pager', className: 'tb-nav' }, [
+            h(IconBtn, { key: 'prev', title: t('dayPrev'), onClick: () => setDate(addDays(date, -1)) }, h(IconChevron, { dir: 'left' })),
+            h('span', { key: 'label', className: 'tb-nav-label' }, `${formatDay(date)} · ${formatWeekday(date)}`),
+            h(IconBtn, { key: 'next', title: t('dayNext'), onClick: () => setDate(addDays(date, 1)) }, h(IconChevron, { dir: 'right' })),
+            h(Btn, { key: 'today', variant: 'quiet', onClick: () => setDate(today) }, t('today')),
+            h('input', {
+              key: 'picker',
+              className: 'tb-input tb-input-date',
+              type: 'date',
+              value: date,
+              'aria-label': t('fieldDate'),
+              onChange: (event) => {
+                if (isDateKey(event.target.value)) setDate(event.target.value)
+              },
+            }),
+          ]),
+          h('div', { key: 'actions', className: 'tb-card-actions' }, [
+            h(Btn, {
+              key: 'add',
+              variant: 'primary',
+              icon: h(IconPlus),
+              onClick: () => props.onAddSlot(date),
+            }, t('dayAdd')),
+          ]),
+        ]),
+        h('div', { key: 'body', className: 'tb-daybody' }, [
+          h('div', { key: 'panels', className: 'tb-daypanels' }, [
+            h('div', { key: 'daily', className: 'tb-dailypanel' }, [
+              h('div', { key: 'title', className: 'tb-panel-title' }, t('dayDailies')),
+              data.dailyTasks.length === 0
+                ? h('div', { key: 'empty', className: 'tb-empty' }, t('noDaily'))
+                : h('ul', { key: 'list', className: 'tb-mdlist' }, dailyRows),
+            ]),
+            h('div', { key: 'tasks', className: 'tb-dailypanel' }, [
+              h('div', { key: 'title', className: 'tb-panel-title' }, t('dayTasks')),
+              taskRows.length === 0
+                ? h('div', { key: 'empty', className: 'tb-empty' }, t('noDayTasks'))
+                : h('div', { key: 'list', className: 'tb-daytask-list' }, taskRows),
+            ]),
+          ]),
+          h('div', { key: 'timeline', style: { flex: '1 1 320px', minWidth: 0 } }, [
+            h('div', { key: 'hint', className: 'tb-hint', style: { padding: '0 0 4px' } }, t('timelineHint')),
+            h(DayTimeline, {
+              key: 'tl',
+              t,
+              slots,
+              date,
+              today,
+              onChangeSlot: changeSlot,
+              onToggleSlot: toggleSlot,
+              onOpenSlot: (slot) => props.onEditSlot(date, slot),
+              onCreateSlot: (start, end) => {
+                props.onCreateSlot(date, start, end)
+                showToast(t('saved'))
+              },
+            }),
+          ]),
+        ]),
+      ])
+    }
+
+    // --- daily work section (two views) --------------------------------------
+
+    function WorkSection(props) {
+      const t = props.t
+      const view = props.view
+      const setView = props.setView
+      return h('section', { className: 'tb-card' }, [
+        h('div', { key: 'head', className: 'tb-card-head' }, [
+          h('span', { key: 'title', className: 'tb-card-title' }, [h(IconList, { key: 'i' }), h('span', { key: 't' }, t('work'))]),
+          h('div', { key: 'switch', className: 'tb-nav' }, [
+            h(Btn, {
+              key: 'week',
+              variant: view === 'week' ? 'primary' : undefined,
+              onClick: () => setView('week'),
+            }, t('workWeek')),
+            h(Btn, {
+              key: 'day',
+              variant: view === 'day' ? 'primary' : undefined,
+              onClick: () => setView('day'),
+            }, t('workDay')),
+          ]),
+          h('div', { key: 'actions', className: 'tb-card-actions' }, [
+            h(Btn, {
+              key: 'edit',
+              icon: h(IconPlus),
+              title: t('dayAdd'),
+              onClick: () => props.onEditArea(view),
+            }, t('dayAdd')),
+          ]),
+        ]),
+        h('div', { key: 'body' }, view === 'week'
+          ? h(WeekView, {
+            key: 'week',
+            t,
+            data: props.data,
+            update: props.update,
+            today: props.today,
+            weekStart: props.weekStart,
+            setWeekStart: props.setWeekStart,
+            setSelectedDate: props.setSelectedDate,
+            onOpenDay: (key) => {
+              props.setSelectedDate(key)
+              setView('day')
+            },
+          })
+          : h(DayView, {
+            key: 'day',
+            t,
+            data: props.data,
+            update: props.update,
+            date: props.date,
+            setDate: props.setSelectedDate,
+            today: props.today,
+            showToast: props.showToast,
+            onAddSlot: (key) => props.onOpenAdd('slot', key),
+            onEditSlot: (key, slot) => props.onOpenEditSlot(key, slot),
+            onCreateSlot: (key, start, end) => props.onCreateSlot(key, start, end),
+          })),
+      ])
+    }
+
+    // --- page -----------------------------------------------------------------
+
+    function TaskBoardPage() {
+      const t = useDict()
+      const store = useTaskBoard()
+      const today = todayKey()
+      const [calendarCursor, setCalendarCursor] = React.useState(today)
+      const [weekStart, setWeekStart] = React.useState(() => startOfWeek(today))
+      const [selectedDate, setSelectedDate] = React.useState(today)
+      const [workView, setWorkView] = React.useState('week')
+      const [dialog, setDialog] = React.useState(null)
+
+      const openAddProject = () => {
+        setDialog({
+          kind: 'project',
+          mode: 'add',
+          value: { title: '', color: PALETTE[0], start: selectedDate, end: selectedDate, note: '' },
+        })
+      }
+      const openAddDaily = () => setDialog({ kind: 'daily', mode: 'add', initialTitle: '' })
+      const openEditDaily = (task) => setDialog({ kind: 'daily', mode: 'edit', initialTitle: task.title, id: task.id })
+      const openAddSlot = (dateKeyValue) => {
+        const key = isDateKey(dateKeyValue) ? dateKeyValue : selectedDate
+        setDialog({
+          kind: 'slot',
+          mode: 'add',
+          value: { title: '', date: key, originDate: key, startTime: '09:00', endTime: '10:00', color: PALETTE[1] },
+        })
+      }
+      const openEditProject = (project) => {
+        setDialog({ kind: 'project', mode: 'edit', value: { ...project } })
+      }
+      const openEditSlot = (key, slot) => {
+        setDialog({
+          kind: 'slot',
+          mode: 'edit',
+          value: {
+            id: slot.id,
+            title: slot.title,
+            date: key,
+            originDate: key,
+            startTime: minutesText(slot.start),
+            endTime: slot.end >= 1440 ? '23:59' : minutesText(slot.end),
+            color: slot.color,
+            done: slot.done === true,
+          },
+        })
+      }
+      const openAddByKind = (kind) => {
+        if (kind === 'project') openAddProject()
+        else if (kind === 'daily') openAddDaily()
+        else openAddSlot(selectedDate)
+      }
+
+      const saveProject = (form) => {
+        if (dialog !== null && dialog.mode === 'edit') {
+          updateProject(form)
+        } else {
+          store.update((data) => withProject(data, {
+            id: uid('p'),
+            title: form.title,
+            color: form.color,
+            start: form.start,
+            end: form.end,
+            note: form.note,
+            done: false,
+          }))
+          store.showFlash(t('saved'))
+        }
+        setDialog(null)
+      }
+      function updateProject(form) {
+        store.update((data) => patchProject(data, form.id, {
+          title: form.title,
+          color: form.color,
+          start: form.start,
+          end: form.end,
+          note: form.note,
+        }))
+        store.showFlash(t('saved'))
+      }
+      const deleteProject = (id) => {
+        store.update((data) => withoutProject(data, id))
+        setDialog(null)
+        store.showFlash(t('saved'))
+      }
+      const saveDaily = (title) => {
+        const editing = dialog !== null && dialog.mode === 'edit' && typeof dialog.id === 'string'
+        store.update((data) => (editing ? renameDailyTask(data, dialog.id, title) : withDailyTask(data, title)))
+        setDialog(null)
+        store.showFlash(t('saved'))
+      }
+      const saveSlot = (form) => {
+        const editing = dialog !== null && dialog.mode === 'edit'
+        const patch = { title: form.title, start: form.start, end: form.end, color: form.color }
+        store.update((data) => {
+          if (!editing) {
+            return withSlot(data, form.date, {
+              id: uid('s'),
+              title: form.title,
+              start: form.start,
+              end: form.end,
+              color: form.color,
+              done: false,
+            })
+          }
+          const origin = dialog.value.originDate
+          if (origin === form.date) return patchSlot(data, form.date, form.id, patch)
+          let next = withoutSlot(data, origin, form.id)
+          next = withSlot(next, form.date, {
+            id: form.id,
+            title: form.title,
+            start: form.start,
+            end: form.end,
+            color: form.color,
+            done: dialog.value.done === true,
+          })
+          return next
+        })
+        setDialog(null)
+        store.showFlash(t('saved'))
+      }
+      const deleteSlot = (date, id) => {
+        store.update((data) => withoutSlot(data, date, id))
+        setDialog(null)
+        store.showFlash(t('saved'))
+      }
+      const createSlotAt = (key, start, end) => {
+        store.update((data) => withSlot(data, key, {
+          id: uid('s'),
+          title: t('quickTaskTitle'),
+          start,
+          end,
+          color: PALETTE[1],
+          done: false,
+        }))
+      }
+      const applyExtracted = (items) => {
+        store.update((data) => {
+          let next = data
+          for (const item of items) {
+            const title = String(item.title || '').trim()
+            if (title === '') continue
+            if (item.kind === 'project') {
+              next = withProject(next, {
+                id: uid('p'),
+                title,
+                color: isColor(item.color) ? item.color : PALETTE[0],
+                start: item.startDate,
+                end: item.endDate,
+                note: typeof item.note === 'string' ? item.note.slice(0, 500) : '',
+                done: false,
+              })
+            } else if (item.kind === 'daily') {
+              next = withDailyTask(next, title)
+            } else {
+              const start = minutesFromText(item.startTime)
+              const end = minutesFromText(item.endTime)
+              if (start === null || end === null || end <= start || !isDateKey(item.date)) continue
+              next = withSlot(next, item.date, {
+                id: uid('s'),
+                title,
+                start,
+                end,
+                color: isColor(item.color) ? item.color : PALETTE[1],
+                done: false,
+              })
+            }
+          }
+          return next
+        })
+        return items.length
+      }
+
+      if (store.status === 'loading' || store.data === null) {
+        return h('div', { className: 'tb-page' }, h('div', { className: 'tb-loading' }, t('loading')))
+      }
+
+      const header = h('div', { key: 'head', className: 'tb-head' }, [
+        h('div', { key: 'left' }, [
+          h('h1', { key: 'title', className: 'tb-title' }, t('title')),
+          h('div', { key: 'sub', className: 'tb-sub' }, t('subtitle')),
+        ]),
+        h('div', { key: 'status', className: 'tb-save', 'data-error': store.saveError === null ? undefined : '1' }, store.saveError !== null
+          ? `${t('saveFailed')}${store.saveError}`
+          : store.saving
+            ? t('saving')
+            : store.flash !== null
+              ? store.flash
+              : store.savedAt !== null
+                ? t('saved')
+                : ''),
+      ])
+
+      const banners = []
+      if (store.error !== null) {
+        const message = store.error === 'host-missing' ? t('hostMissing') : `${t('loadFailed')}${store.error}`
+        banners.push(h('div', { key: 'load-error', className: 'tb-banner', 'data-error': '1', role: 'alert' }, [
+          h('span', { key: 'text' }, message),
+          h(Btn, {
+            key: 'retry',
+            variant: 'quiet',
+            onClick: () => {
+              if (store.blocked && store.dirty && typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(t('retryDiscardConfirm'))) return
+              store.retry()
+            },
+          }, t('retry')),
+        ]))
+      } else if (store.warning !== null) {
+        banners.push(h('div', { key: 'load-warning', className: 'tb-banner' }, store.warning))
+      }
+      if (store.blocked) {
+        banners.push(h('div', { key: 'blocked', className: 'tb-banner', 'data-error': '1', role: 'alert' }, [
+          h('span', { key: 'text' }, t('dataBlocked')),
+          h(Btn, { key: 'allow', variant: 'quiet', onClick: store.allowSave }, t('overwriteSave')),
+        ]))
+      }
+
+      const dialogNode = dialog === null ? null : dialog.kind === 'project'
+        ? h(ProjectDialog, {
+          key: 'project-dialog',
+          t,
+          mode: dialog.mode,
+          initial: dialog.value,
+          onSave: saveProject,
+          onDelete: deleteProject,
+          onCancel: () => setDialog(null),
+        })
+        : dialog.kind === 'daily'
+          ? h(DailyDialog, {
+            key: 'daily-dialog',
+            t,
+            mode: dialog.mode,
+            initialTitle: dialog.initialTitle,
+            onSave: saveDaily,
+            onCancel: () => setDialog(null),
+          })
+          : h(SlotDialog, {
+            key: 'slot-dialog',
+            t,
+            mode: dialog.mode,
+            initial: dialog.value,
+            onSave: saveSlot,
+            onDelete: deleteSlot,
+            onCancel: () => setDialog(null),
+          })
+
+      return h('div', { className: 'tb-page' }, h('div', { className: 'tb-shell' }, [
+        header,
+        ...banners,
+        h(ExtractionBar, {
+          key: 'extraction',
+          t,
+          today,
+          onApply: applyExtracted,
+          onOpenAdd: openAddByKind,
+          onToast: store.showFlash,
+        }),
+        h(CalendarSection, {
+          key: 'calendar',
+          t,
+          data: store.data,
+          update: store.update,
+          today,
+          cursor: calendarCursor,
+          setCursor: setCalendarCursor,
+          selectedDate,
+          setSelectedDate,
+          onOpenDay: (key) => {
+            setSelectedDate(key)
+            setWorkView('day')
+          },
+          onEditProject: openEditProject,
+          showToast: store.showFlash,
+        }),
+        h(DailySection, {
+          key: 'daily',
+          t,
+          data: store.data,
+          update: store.update,
+          today,
+          showToast: store.showFlash,
+          onEditDaily: openEditDaily,
+        }),
+        h(WorkSection, {
+          key: 'work',
+          t,
+          data: store.data,
+          update: store.update,
+          today,
+          view: workView,
+          setView: setWorkView,
+          weekStart,
+          setWeekStart,
+          setSelectedDate,
+          date: selectedDate,
+          showToast: store.showFlash,
+          onOpenAdd: (kind, key) => {
+            if (kind === 'slot') openAddSlot(key)
+            else openAddByKind(kind)
+          },
+          onOpenEditSlot: openEditSlot,
+          onCreateSlot: createSlotAt,
+          onEditArea: () => {
+            openAddSlot(selectedDate)
+          },
+        }),
+        dialogNode,
+      ]))
+    }
+
+    class TaskBoardBoundary extends React.Component {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error: String((error && error.message) || error) }
+      }
+
+      componentDidCatch(error) {
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error('dsh-task-board: page error', error)
+        }
+      }
+
+      render() {
+        if (this.state.error === null) return h(TaskBoardPage, this.props)
+        return h('div', { className: 'tb-page' }, h('div', { className: 'tb-crash' }, [
+          h('div', { key: 'title', className: 'tb-title' }, '任务面板出错 / Task board error'),
+          h('div', { key: 'detail', className: 'tb-hint-error' }, this.state.error),
+          h(Btn, { key: 'retry', onClick: () => this.setState({ error: null }) }, '重试 / Retry'),
+        ]))
+      }
+    }
+
+    function PanelIcon(props) {
+      const size = props && typeof props.size === 'number' ? props.size : 18
+      const active = props && props.active === true
+      return h('svg', {
+        ...svgProps(size),
+        style: {
+          display: 'block',
+          flex: 'none',
+          color: active ? 'var(--dsw-alias-brand-primary)' : 'currentColor',
+        },
+      }, [
+        h('rect', { key: 'r', x: 3, y: 4.5, width: 18, height: 16, rx: 2.5 }),
+        h('path', { key: 'l1', d: 'M3 9.5h18' }),
+        h('path', { key: 'l2', d: 'M8 2.8v3.4M16 2.8v3.4' }),
+        h('path', { key: 'check', d: 'M8.2 14.4l2.3 2.3 5-5.2' }),
+      ])
+    }
+
+    const EXTRA_CSS = [
+      '.tb-include{flex:none;width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-brand-primary,#4C8DFF);cursor:pointer}',
+      '.tb-erow[data-invalid]{border-color:var(--dsw-alias-state-error-primary,#e5484d)}',
+      '.tb-md-bullet{flex:none;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-wcol[data-past] .tb-wempty{color:#5A6472}',
+      '.tb-wcol[data-past] .tb-wtask[data-done] .tb-wtask-title{color:#5A6472}',
+      '.tb-day-count{position:absolute;right:5px;bottom:1px;font-size:9px;line-height:11px;color:var(--dsw-alias-brand-primary)}',
+      '.tb-day-month{font-size:9px;line-height:11px;color:var(--dsw-alias-label-secondary);opacity:.9}',
+      '.tb-wtask[data-done] .tb-wtask-title{text-decoration:line-through;color:var(--dsw-alias-label-tertiary)}',
+      '.tb-tl-hours{box-sizing:border-box}',
+      '.tb-timeline{max-height:760px;overflow:auto}',
+    ].join('')
+    // --- plugin registration --------------------------------------------------
+
+    const inject = ['slots', 'locale']
+
+    function apply(ctx) {
+      localeService = ctx.get('locale') || null
+      const style = document.createElement('style')
+      style.dataset.dshTaskBoard = '1'
+      style.textContent = CSS + EXTRA_CSS
+      document.head.appendChild(style)
+      ctx.effect(() => () => style.remove(), 'dsh-task-board: styles')
+
+      if (localeService && typeof localeService.register === 'function') {
+        ctx.effect(() => {
+          try {
+            return localeService.register(NS, { zh, en })
+          } catch (error) {
+            if (typeof console !== 'undefined') console.error('dsh-task-board: locale registration failed', error)
+            return () => {}
+          }
+        }, 'dsh-task-board: dictionaries')
+      }
+
+      const panelLabel = () => currentDict().panel
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: PANEL_ID,
+        order: 20,
+        locale: NS,
+        label: panelLabel,
+      }, PanelIcon))
+      ctx.slots.inject('main', () => ctx.slots.register({
+        name: 'main',
+        key: PANEL_ID,
+        locale: NS,
+        label: panelLabel,
+      }, TaskBoardBoundary))
+    }
+
+    return { name: 'dsh-task-board', inject, apply }
+  },
+})
