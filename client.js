@@ -1,4 +1,4 @@
-// dsh-task-board — browser half.
+// @local/dsh-task-board — browser half.
 //
 // A full central page (main slot key "task-board") plus a sidebar panel icon:
 //   * top AI extraction bar -> POST /task-board/extract -> editable task draft;
@@ -9,7 +9,7 @@
 //
 // Data lives in the Host half (JSON file); this module only renders and posts.
 window.__ModuleLoader__.load({
-  id: 'dsh-task-board',
+  id: '@local/dsh-task-board',
   factory: (require) => {
     const React = require('react')
     const h = React.createElement
@@ -140,6 +140,12 @@ window.__ModuleLoader__.load({
       moreTasks: (count) => `还有 ${count} 项`,
       lessTasks: '收起',
       dailyToggle: (done) => (done ? '今天已完成，点击取消' : '标记今天完成'),
+      subtasksLabel: '子任务：',
+      subtasksEditHint: '（在「具体当天」页修改）',
+      addSubtask: '添加子任务',
+      newSubtaskPlaceholder: '输入子任务，回车添加',
+      subtaskCount: (count) => `${count} 个子任务`,
+      slotSelected: '已选当天任务：',
     }
 
     const en = {
@@ -247,6 +253,12 @@ window.__ModuleLoader__.load({
       moreTasks: (count) => `${count} more`,
       lessTasks: 'Collapse',
       dailyToggle: (done) => (done ? 'Done today; click to undo' : 'Mark done today'),
+      subtasksLabel: 'Subtasks: ',
+      subtasksEditHint: '(edit on the day view)',
+      addSubtask: 'Add subtask',
+      newSubtaskPlaceholder: 'Type a subtask, Enter to add',
+      subtaskCount: (count) => `${count} subtask(s)`,
+      slotSelected: 'Selected day task: ',
     }
 
     // --- styles ---------------------------------------------------------------
@@ -350,6 +362,23 @@ window.__ModuleLoader__.load({
       '.tb-daytask-list{display:flex;flex-direction:column;gap:2px}',
       '.tb-daytask{display:flex;align-items:center;gap:6px;min-width:0;padding:1px 2px;border-radius:4px;font-size:12px;line-height:20px;cursor:pointer}',
       '.tb-daytask:hover{background:rgba(128,128,128,.12)}',
+      '.tb-daytask-block{display:flex;flex-direction:column;gap:1px;padding:1px 0}',
+      '.tb-checkbox-xs{width:14px;height:14px;border-radius:4px}',
+      '.tb-checkbox-xs svg{width:9px;height:9px;stroke-width:2.6}',
+      '.tb-subtask{display:flex;align-items:center;gap:4px;min-width:0;padding:1px 2px 1px 24px;font-size:11px;line-height:18px}',
+      '.tb-subtask-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}',
+      '.tb-subtask[data-done] .tb-subtask-title{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}',
+      '.tb-subtask-act{appearance:none;flex:none;padding:0 3px;border:none;border-radius:3px;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:16px;cursor:pointer}',
+      '.tb-subtask-act:hover{background:rgba(128,128,128,.14);color:var(--dsw-alias-label-primary)}',
+      '.tb-subtask-input{flex:1 1 auto;min-width:40px;height:18px;box-sizing:border-box;padding:0 4px;font-size:11px}',
+      '.tb-subtask-addbtn{appearance:none;flex:none;margin-left:auto;width:16px;height:16px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:16px;cursor:pointer}',
+      '.tb-subtask-addbtn:hover{background:rgba(128,128,128,.16);color:var(--dsw-alias-label-primary)}',
+      '.tb-subtask-mark{flex:none;width:14px;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:11px}',
+      '.tb-subitem{font-size:11px;line-height:16px;padding:1px 7px;border-radius:8px;background:var(--dsw-alias-bg-layer-2)}',
+      '.tb-subitem[data-done]{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}',
+      '.tb-bar-sub{flex:none;margin-left:auto;padding:0 4px;border-radius:6px;background:rgba(255,255,255,.28);color:#fff;font-size:9px;line-height:12px}',
+      '.tb-slot-subs{position:absolute;left:3px;bottom:1px;padding:0 3px;border-radius:4px;background:rgba(255,255,255,.28);color:#fff;font-size:9px;line-height:11px;pointer-events:none}',
+      '.tb-wsub{flex:none;margin-left:2px;padding:0 4px;border-radius:6px;background:rgba(128,128,128,.16);color:var(--dsw-alias-label-secondary);font-size:9px;line-height:12px}',
       '.tb-daytask[data-done] .tb-wtask-title{text-decoration:line-through;color:var(--dsw-alias-label-tertiary)}',
       '.tb-wtask-time{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}',
       '.tb-wcol[data-past] .tb-wtask-time{color:#5A6472}',
@@ -614,6 +643,24 @@ window.__ModuleLoader__.load({
       return { version: 1, projects: [], dailyTasks: [], dayPlans: {} }
     }
 
+    /** Canonicalize one task's ordered subtask list (order is never reorderable). */
+    function normalizeSubtasks(raw) {
+      if (!Array.isArray(raw)) return []
+      const list = []
+      for (const entry of raw.slice(0, 50)) {
+        const title = typeof entry === 'string'
+          ? entry.trim()
+          : (entry && typeof entry.title === 'string' ? entry.title.trim() : '')
+        if (title === '') continue
+        list.push({
+          id: entry && typeof entry === 'object' && typeof entry.id === 'string' && entry.id !== '' ? entry.id : uid('st'),
+          title: title.slice(0, 200),
+          done: Boolean(entry && typeof entry === 'object' && entry.done === true),
+        })
+      }
+      return list
+    }
+
     function normalizeStore(raw) {
       const store = emptyStore()
       if (raw === null || typeof raw !== 'object') return store
@@ -631,6 +678,7 @@ window.__ModuleLoader__.load({
             end,
             note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : '',
             done: entry.done === true,
+            subtasks: normalizeSubtasks(entry.subtasks),
           })
         }
       }
@@ -670,6 +718,7 @@ window.__ModuleLoader__.load({
               end,
               color: isColor(entry.color) ? entry.color : pickColor(slots),
               done: entry.done === true,
+              subtasks: normalizeSubtasks(entry.subtasks),
             })
           }
           if (slots.length > 0) {
@@ -686,10 +735,16 @@ window.__ModuleLoader__.load({
         if (seenIds.has(item.id)) item.id = uid(prefix)
         seenIds.add(item.id)
       }
-      for (const project of store.projects) repairId(project, 'p')
+      for (const project of store.projects) {
+        repairId(project, 'p')
+        for (const sub of project.subtasks) repairId(sub, 'st')
+      }
       for (const task of store.dailyTasks) repairId(task, 'd')
       for (const key of Object.keys(store.dayPlans)) {
-        for (const slot of store.dayPlans[key]) repairId(slot, 's')
+        for (const slot of store.dayPlans[key]) {
+          repairId(slot, 's')
+          for (const sub of slot.subtasks) repairId(sub, 'st')
+        }
       }
       return store
     }
@@ -772,6 +827,54 @@ window.__ModuleLoader__.load({
       if (list.length > 0) dayPlans[key] = list
       else delete dayPlans[key]
       return { ...store, dayPlans }
+    }
+
+    // --- subtasks -------------------------------------------------------------
+
+    /** Apply `mutator` to one project's ordered subtask list. */
+    function mutateProjectSubtasks(store, projectId, mutator) {
+      return {
+        ...store,
+        projects: store.projects.map((project) => (
+          project.id === projectId
+            ? { ...project, subtasks: mutator(Array.isArray(project.subtasks) ? project.subtasks : []) }
+            : project
+        )),
+      }
+    }
+
+    /** Apply `mutator` to one day task's ordered subtask list. */
+    function mutateSlotSubtasks(store, key, slotId, mutator) {
+      const slot = slotsOn(store, key).find((entry) => entry.id === slotId)
+      if (slot === undefined) return store
+      return patchSlot(store, key, slotId, {
+        subtasks: mutator(Array.isArray(slot.subtasks) ? slot.subtasks : []),
+      })
+    }
+
+    /** Add one subtask to a project or day task; order is append-only. */
+    function addSubtaskTo(store, owner, ownerId, key, title) {
+      const clean = String(title === undefined || title === null ? '' : title).trim().slice(0, 200)
+      if (clean === '') return store
+      const subtask = { id: uid('st'), title: clean, done: false }
+      if (owner === 'project') {
+        return mutateProjectSubtasks(store, ownerId, (list) => list.concat([subtask]))
+      }
+      return mutateSlotSubtasks(store, key, ownerId, (list) => list.concat([subtask]))
+    }
+
+    function patchSubtaskIn(store, owner, ownerId, key, subtaskId, patch) {
+      const apply = (list) => list.map((subtask) => (subtask.id === subtaskId ? { ...subtask, ...patch } : subtask))
+      return owner === 'project'
+        ? mutateProjectSubtasks(store, ownerId, apply)
+        : mutateSlotSubtasks(store, key, ownerId, apply)
+    }
+
+    function removeSubtaskFrom(store, owner, ownerId, key, subtaskId) {
+      const apply = (list) => list.filter((subtask) => subtask.id !== subtaskId)
+      return owner === 'project'
+        ? mutateProjectSubtasks(store, ownerId, apply)
+        : mutateSlotSubtasks(store, key, ownerId, apply)
     }
 
     // --- locale ---------------------------------------------------------------
@@ -1402,6 +1505,18 @@ window.__ModuleLoader__.load({
         kind,
         title,
         note: typeof task.note === 'string' ? task.note : '',
+        subtasks: Array.isArray(task.subtasks)
+          ? task.subtasks
+            .map((sub) => {
+              const subTitle = typeof sub === 'string'
+                ? sub.trim()
+                : (sub && typeof sub.title === 'string' ? sub.title.trim() : '')
+              if (subTitle === '') return null
+              return { title: subTitle.slice(0, 200), done: Boolean(sub && typeof sub === 'object' && sub.done === true) }
+            })
+            .filter(Boolean)
+            .slice(0, 50)
+          : [],
         startDate: today,
         endDate: today,
         date: today,
@@ -1582,14 +1697,20 @@ window.__ModuleLoader__.load({
             h('option', { key: 'daily', value: 'daily' }, t('kindDaily')),
             h('option', { key: 'slot', value: 'slot' }, t('kindSlot')),
           ]),
-          h('div', { key: 'main', className: 'tb-erow-main' }, h('input', {
-            className: 'tb-input tb-input-title',
-            type: 'text',
-            value: item.title,
-            maxLength: 200,
-            'aria-label': t('fieldTitle'),
-            onChange: (event) => patchItem(item.key, { title: event.target.value }),
-          })),
+          h('div', { key: 'main', className: 'tb-erow-main' }, [
+            h('input', {
+              key: 'title',
+              className: 'tb-input tb-input-title',
+              type: 'text',
+              value: item.title,
+              maxLength: 200,
+              'aria-label': t('fieldTitle'),
+              onChange: (event) => patchItem(item.key, { title: event.target.value }),
+            }),
+            Array.isArray(item.subtasks) && item.subtasks.length > 0
+              ? h('span', { key: 'subs', className: 'tb-hint' }, t('subtaskCount', item.subtasks.length))
+              : null,
+          ]),
           h('div', { key: 'fields', className: 'tb-erow-fields' }, fields),
           h(IconBtn, { key: 'remove', title: t('delete'), onClick: () => removeItem(item.key) }, h(IconClose)),
         ])
@@ -1599,9 +1720,10 @@ window.__ModuleLoader__.load({
           h('div', { key: 'head', className: 'tb-extract-result-head' }, [
             h('span', { key: 'text' }, t('extractFound', state.items.length)),
             state.source === 'fallback'
-              ? h('span', { key: 'src', className: 'tb-hint-warn' }, t('extractFallback'))
-              : null,
-            state.warning !== null ? h('span', { key: 'warn', className: 'tb-hint-warn' }, state.warning) : null,
+              ? h('span', { key: 'warn', className: 'tb-hint-warn' }, state.warning !== null ? state.warning : t('extractFallback'))
+              : state.warning !== null
+                ? h('span', { key: 'warn', className: 'tb-hint-warn' }, state.warning)
+                : null,
           ]),
           h('div', { key: 'rows', style: { display: 'flex', flexDirection: 'column', gap: 8 } }, state.items.map(renderRow)),
           h('div', { key: 'actions', className: 'tb-extract-actions' }, [
@@ -1660,6 +1782,11 @@ window.__ModuleLoader__.load({
       const selectedDate = props.selectedDate
       const selectedId = props.selectedId
       const setSelectedId = props.setSelectedId
+      const selectedKind = props.selectedKind
+      const selectedSlotDate = props.selectedSlotDate
+      const selectProject = props.selectProject
+      const selectSlot = props.selectSlot
+      const onEditSlot = props.onEditSlot
       const editingId = props.editingId
       const setEditingId = props.setEditingId
       const beginDrag = props.beginDrag
@@ -1673,12 +1800,32 @@ window.__ModuleLoader__.load({
       for (const project of data.projects) {
         if (project.end < weekStart || project.start > weekEnd) continue
         segments.push({
+          type: 'project',
           project,
           startOffset: clamp(daysBetween(weekStart, project.start), 0, 6),
           endOffset: clamp(daysBetween(weekStart, project.end), 0, 6),
         })
       }
-      segments.sort((a, b) => a.startOffset - b.startOffset || a.endOffset - b.endOffset)
+      // Timed day tasks render on their own date as single-column bars. They pack
+      // after long-term projects (priority: project > day task) and follow the
+      // same five-lane cap with the expand button. Recurring daily tasks never
+      // appear on the calendar.
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        const dateKey = week[dayIndex]
+        for (const slot of slotsOn(data, dateKey)) {
+          segments.push({
+            type: 'slot',
+            slot,
+            dateKey,
+            startOffset: dayIndex,
+            endOffset: dayIndex,
+          })
+        }
+      }
+      segments.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'project' ? -1 : 1
+        return a.startOffset - b.startOffset || a.endOffset - b.endOffset
+      })
       const laneEnds = []
       for (const segment of segments) {
         let lane = -1
@@ -1731,7 +1878,45 @@ window.__ModuleLoader__.load({
       const bars = []
       for (const segment of segments) {
         if (collapsed && segment.lane >= MAX_WEEK_LANES) continue
+        if (segment.type === 'slot') {
+          const slot = segment.slot
+          const dateKey = segment.dateKey
+          const slotSelected = selectedKind === 'slot' && selectedSlotDate === dateKey && selectedId === slot.id
+          const slotSubtaskTotal = Array.isArray(slot.subtasks) ? slot.subtasks.length : 0
+          bars.push(h('div', {
+            key: `slot-${dateKey}-${slot.id}`,
+            className: 'tb-bar tb-bar-slot',
+            'data-kind': 'slot',
+            'data-selected': slotSelected ? '1' : undefined,
+            role: 'button',
+            tabIndex: 0,
+            title: `${minutesText(slot.start)}–${minutesText(slot.end)} ${slot.title} · ${dateKey}${slotSubtaskTotal > 0 ? ` · ${t('subtaskCount', slotSubtaskTotal)}` : ''}`,
+            style: {
+              left: `calc(${(segment.startOffset / 7) * 100}% + 1px)`,
+              width: `calc(${(1 / 7) * 100}% - 2px)`,
+              top: `${segment.lane * LANE_H}px`,
+              background: slot.color,
+              color: '#FFFFFF',
+              borderRadius: '8px',
+            },
+            onClick: (event) => {
+              event.stopPropagation()
+              setEditingId(null)
+              selectSlot(dateKey, slot.id)
+            },
+            onDoubleClick: (event) => {
+              event.stopPropagation()
+              onEditSlot(dateKey, slot)
+            },
+          }, [
+            h('span', { key: 'title', className: 'tb-bar-title' }, `${minutesText(slot.start)} ${slot.title}`),
+            slotSubtaskTotal > 0 ? h('span', { key: 'subs', className: 'tb-bar-sub' }, String(slotSubtaskTotal)) : null,
+          ]))
+          continue
+        }
         const project = segment.project
+        const projectSelected = selectedKind === 'project' && selectedId === project.id
+        const projectSubtaskTotal = Array.isArray(project.subtasks) ? project.subtasks.length : 0
         const continuesLeft = project.start < weekStart
         const continuesRight = project.end > weekEnd
         const editing = editingId === project.id
@@ -1756,11 +1941,12 @@ window.__ModuleLoader__.load({
         bars.push(h('div', {
           key: project.id,
           className: 'tb-bar',
-          'data-selected': selectedId === project.id ? '1' : undefined,
+          'data-kind': 'project',
+          'data-selected': projectSelected ? '1' : undefined,
           'data-editing': editing ? '1' : undefined,
           role: 'button',
           tabIndex: 0,
-          title: `${project.title} · ${project.start} → ${project.end}`,
+          title: `${project.title} · ${project.start} → ${project.end}${projectSubtaskTotal > 0 ? ` · ${t('subtaskCount', projectSubtaskTotal)}` : ''}`,
           style: {
             left: `calc(${(segment.startOffset / 7) * 100}% + 1px)`,
             width: `calc(${((segment.endOffset - segment.startOffset + 1) / 7) * 100}% - 2px)`,
@@ -1772,17 +1958,17 @@ window.__ModuleLoader__.load({
           onClick: (event) => {
             event.stopPropagation()
             if (editingId !== null && editingId !== project.id) setEditingId(null)
-            setSelectedId(project.id)
+            selectProject(project.id)
           },
           onDoubleClick: (event) => {
             event.stopPropagation()
-            setSelectedId(project.id)
+            selectProject(project.id)
             setEditingId(editing ? null : project.id)
           },
           onKeyDown: (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault()
-              setSelectedId(project.id)
+              selectProject(project.id)
             }
           },
           onPointerDown: (event) => {
@@ -1805,6 +1991,7 @@ window.__ModuleLoader__.load({
             'aria-hidden': 'true',
           }) : null,
           h('span', { key: 'title', className: 'tb-bar-title' }, project.title),
+          projectSubtaskTotal > 0 ? h('span', { key: 'subs', className: 'tb-bar-sub' }, String(projectSubtaskTotal)) : null,
           editing ? h('span', {
             key: 'start',
             className: 'tb-bar-handle tb-bar-handle-start',
@@ -1852,9 +2039,12 @@ window.__ModuleLoader__.load({
       const setSelectedDate = props.setSelectedDate
       const onOpenDay = props.onOpenDay
       const onEditProject = props.onEditProject
+      const onEditSlot = props.onEditSlot
       const showToast = props.showToast
 
       const [selectedId, setSelectedId] = React.useState(null)
+      const [selectedKind, setSelectedKind] = React.useState('project')
+      const [selectedSlotDate, setSelectedSlotDate] = React.useState(null)
       const [editingId, setEditingId] = React.useState(null)
       const [expandedWeeks, setExpandedWeeks] = React.useState(() => new Set())
       const [drag, setDrag] = React.useState(null)
@@ -1934,11 +2124,15 @@ window.__ModuleLoader__.load({
             if (target.closest('.tb-bar') || target.closest('.tb-modal') || target.closest('.tb-overlay')) return
           }
           setSelectedId(null)
+          setSelectedKind('project')
+          setSelectedSlotDate(null)
           setEditingId(null)
         }
         const onKey = (event) => {
           if (event.key === 'Escape') {
             setSelectedId(null)
+            setSelectedKind('project')
+            setSelectedSlotDate(null)
             setEditingId(null)
           }
         }
@@ -1970,11 +2164,30 @@ window.__ModuleLoader__.load({
         setDrag(current)
       }, [])
 
-      const selected = data.projects.find((project) => project.id === selectedId) || null
+      const selectProject = React.useCallback((id) => {
+        setSelectedKind('project')
+        setSelectedId(id)
+      }, [])
+      const selectSlot = React.useCallback((dateKey, id) => {
+        setSelectedKind('slot')
+        setSelectedSlotDate(dateKey)
+        setSelectedId(id)
+      }, [])
+      const selected = selectedKind === 'project'
+        ? data.projects.find((project) => project.id === selectedId) || null
+        : null
+      const slotSelected = selectedKind === 'slot' && selectedSlotDate !== null
+        ? slotsOn(data, selectedSlotDate).find((slot) => slot.id === selectedId) || null
+        : null
       const isEditing = selected !== null && editingId === selected.id
+      const activeSubtasks = selected !== null && Array.isArray(selected.subtasks)
+        ? selected.subtasks
+        : (slotSelected !== null && Array.isArray(slotSelected.subtasks) ? slotSelected.subtasks : [])
       /** Leave the selected/drag state entirely (double-click on empty space). */
       const clearActive = React.useCallback(() => {
         setSelectedId(null)
+        setSelectedKind('project')
+        setSelectedSlotDate(null)
         setEditingId(null)
       }, [])
       const actionBar = selected === null ? null : h('div', { className: 'tb-card-actions' }, [
@@ -1989,13 +2202,28 @@ window.__ModuleLoader__.load({
           onClick: () => {
             if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(t('confirmDelete'))) return
             update((store) => withoutProject(store, selected.id))
-            setSelectedId(null)
-            setEditingId(null)
+            clearActive()
             showToast(t('saved'))
           },
         }, t('projectDelete')),
-        h(Btn, { key: 'clear', variant: 'quiet', onClick: () => { setSelectedId(null); setEditingId(null) } }, t('projectCancel')),
+        h(Btn, { key: 'clear', variant: 'quiet', onClick: clearActive }, t('projectCancel')),
       ])
+      const slotActionBar = slotSelected === null ? null : h('div', { className: 'tb-card-actions' }, [
+        h('span', { key: 'info', className: 'tb-card-sub' }, `${t('slotSelected')}${slotSelected.title} · ${selectedSlotDate} · ${minutesText(slotSelected.start)}–${minutesText(slotSelected.end)}`),
+        h(Btn, { key: 'edit', onClick: () => onEditSlot(selectedSlotDate, slotSelected) }, t('projectEdit')),
+        h(Btn, {
+          key: 'delete',
+          variant: 'danger',
+          onClick: () => {
+            if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(t('confirmDelete'))) return
+            update((store) => withoutSlot(store, selectedSlotDate, slotSelected.id))
+            clearActive()
+            showToast(t('saved'))
+          },
+        }, t('delete')),
+        h(Btn, { key: 'clear', variant: 'quiet', onClick: clearActive }, t('projectCancel')),
+      ])
+      const activeBar = actionBar !== null ? actionBar : slotActionBar
 
       return h('section', { className: 'tb-card' }, [
         h('div', { key: 'head', className: 'tb-card-head' }, [
@@ -2008,7 +2236,7 @@ window.__ModuleLoader__.load({
             h(IconBtn, { key: 'next', title: t('monthNext'), onClick: () => props.setCursor(addMonths(firstMonth, 1)) }, h(IconChevron, { dir: 'right' })),
           ]),
         ]),
-        actionBar === null ? null : h('div', {
+        activeBar === null ? null : h('div', {
           key: 'selbar',
           style: {
             display: 'flex',
@@ -2019,7 +2247,28 @@ window.__ModuleLoader__.load({
             borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.18))',
             background: 'var(--dsw-alias-bg-layer-2)',
           },
-        }, actionBar),
+        }, activeBar),
+        activeSubtasks.length === 0 ? null : h('div', {
+          key: 'subsbar',
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '6px 10px',
+            padding: '5px 14px',
+            borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.18))',
+            fontSize: 12,
+          },
+        }, [
+          h('span', { key: 'label', className: 'tb-hint' }, t('subtasksLabel')),
+          ...activeSubtasks.map((sub) => h('span', {
+            key: sub.id,
+            className: 'tb-subitem',
+            'data-done': sub.done ? '1' : undefined,
+            title: sub.title,
+          }, `${sub.done ? '☑' : '☐'} ${sub.title}`)),
+          h('span', { key: 'hint', className: 'tb-hint' }, t('subtasksEditHint')),
+        ]),
         isEditing ? h('div', { key: 'draghint', className: 'tb-hint', style: { padding: '6px 14px 0' } }, t('dragModeHint')) : null,
         h('div', { key: 'cal', className: 'tb-cal' }, [
           h('div', { key: 'weekhead', className: 'tb-cal-weekhead' },
@@ -2035,6 +2284,11 @@ window.__ModuleLoader__.load({
             setSelectedDate,
             selectedId,
             setSelectedId,
+            selectedKind,
+            selectedSlotDate,
+            selectProject,
+            selectSlot,
+            onEditSlot: props.onEditSlot,
             editingId,
             setEditingId,
             beginDrag,
@@ -2185,6 +2439,9 @@ window.__ModuleLoader__.load({
             }),
             h('span', { key: 'time', className: 'tb-wtask-time' }, minutesText(slot.start)),
             h('span', { key: 'title', className: 'tb-wtask-title', title: `${minutesText(slot.start)}–${minutesText(slot.end)} ${slot.title}` }, slot.title),
+            Array.isArray(slot.subtasks) && slot.subtasks.length > 0
+              ? h('span', { key: 'subs', className: 'tb-wsub', title: t('subtaskCount', slot.subtasks.length) }, String(slot.subtasks.length))
+              : null,
           ]))
         }
         for (const project of projects) {
@@ -2199,6 +2456,9 @@ window.__ModuleLoader__.load({
             }),
             h('span', { key: 'dot', className: 'tb-wdot', style: { background: project.color } }),
             h('span', { key: 'title', className: 'tb-wtask-title', title: `${project.title} · ${project.start} → ${project.end}` }, project.title),
+            Array.isArray(project.subtasks) && project.subtasks.length > 0
+              ? h('span', { key: 'subs', className: 'tb-wsub', title: t('subtaskCount', project.subtasks.length) }, String(project.subtasks.length))
+              : null,
           ]))
         }
         return h('div', {
@@ -2416,7 +2676,7 @@ window.__ModuleLoader__.load({
             background: slot.color,
             color: readableOn(slot.color),
           },
-          title: `${slot.title} · ${minutesText(start)} – ${minutesText(end)}`,
+          title: `${slot.title} · ${minutesText(start)} – ${minutesText(end)}${Array.isArray(slot.subtasks) && slot.subtasks.length > 0 ? ` · ${t('subtaskCount', slot.subtasks.length)}` : ''}`,
           onPointerDown: (event) => startDrag(event, slot, 'move'),
           onClick: (event) => {
             if (suppressClickRef.current) {
@@ -2434,6 +2694,9 @@ window.__ModuleLoader__.load({
           }),
           h('span', { key: 'title', className: 'tb-slot-title' }, slot.title),
           height >= 32 ? h('span', { key: 'time', className: 'tb-slot-time' }, `${minutesText(start)} – ${minutesText(end)}`) : null,
+          Array.isArray(slot.subtasks) && slot.subtasks.length > 0
+            ? h('span', { key: 'subs', className: 'tb-slot-subs' }, String(slot.subtasks.length))
+            : null,
           h('button', {
             key: 'done',
             type: 'button',
@@ -2535,9 +2798,131 @@ window.__ModuleLoader__.load({
           onToggle()
         },
       }, checked ? h(IconCheck, { key: 'icon', size: 10 }) : null)
-      const taskRows = []
+
+      // Subtasks are edited only here (the "specific day" page); their order is
+      // the stored order and is never drag-reorderable.
+      const [subtaskDraft, setSubtaskDraft] = React.useState(null) // { owner, ownerId, title }
+      const [subtaskEdit, setSubtaskEdit] = React.useState(null) // { owner, ownerId, subtaskId, title }
+      const mutateSubtasks = (owner, ownerId, mutator) => {
+        update((store) => (owner === 'project'
+          ? mutateProjectSubtasks(store, ownerId, mutator)
+          : mutateSlotSubtasks(store, date, ownerId, mutator)))
+      }
+      const changeSubtask = (owner, ownerId, subtaskId, patch) => {
+        mutateSubtasks(owner, ownerId, (list) => list.map((sub) => (sub.id === subtaskId ? { ...sub, ...patch } : sub)))
+      }
+      const addSubtask = (owner, ownerId, rawTitle) => {
+        const clean = String(rawTitle === undefined || rawTitle === null ? '' : rawTitle).trim().slice(0, 200)
+        if (clean === '') return
+        mutateSubtasks(owner, ownerId, (list) => list.concat([{ id: uid('st'), title: clean, done: false }]))
+      }
+      const removeSubtask = (owner, ownerId, subtaskId) => {
+        mutateSubtasks(owner, ownerId, (list) => list.filter((sub) => sub.id !== subtaskId))
+      }
+      const renderSubtasks = (owner, ownerId, task) => {
+        const list = Array.isArray(task.subtasks) ? task.subtasks : []
+        const rows = list.map((sub) => {
+          const editingThis = subtaskEdit !== null
+            && subtaskEdit.owner === owner
+            && subtaskEdit.ownerId === ownerId
+            && subtaskEdit.subtaskId === sub.id
+          return h('div', { key: sub.id, className: 'tb-subtask', 'data-done': sub.done ? '1' : undefined }, [
+            h('button', {
+              key: 'check',
+              type: 'button',
+              className: 'tb-checkbox tb-checkbox-xs',
+              'data-checked': sub.done ? '1' : undefined,
+              title: t('dailyToggle', sub.done),
+              'aria-label': t('dailyToggle', sub.done),
+              'aria-pressed': sub.done ? 'true' : 'false',
+              onClick: () => changeSubtask(owner, ownerId, sub.id, { done: !sub.done }),
+            }, sub.done ? h(IconCheck, { key: 'icon', size: 9 }) : null),
+            editingThis
+              ? h('input', {
+                key: 'input',
+                className: 'tb-input tb-subtask-input',
+                autoFocus: true,
+                value: subtaskEdit.title,
+                onChange: (event) => setSubtaskEdit({ ...subtaskEdit, title: event.target.value }),
+                onKeyDown: (event) => {
+                  if (event.key === 'Enter') {
+                    const next = subtaskEdit.title.trim().slice(0, 200)
+                    if (next !== '') changeSubtask(owner, ownerId, sub.id, { title: next })
+                    setSubtaskEdit(null)
+                  } else if (event.key === 'Escape') {
+                    setSubtaskEdit(null)
+                  }
+                },
+                onBlur: () => {
+                  const next = subtaskEdit.title.trim().slice(0, 200)
+                  if (next !== '') changeSubtask(owner, ownerId, sub.id, { title: next })
+                  setSubtaskEdit(null)
+                },
+              })
+              : h('span', {
+                key: 'title',
+                className: 'tb-subtask-title',
+                title: t('projectEdit'),
+                onClick: () => setSubtaskEdit({ owner, ownerId, subtaskId: sub.id, title: sub.title }),
+              }, sub.title),
+            h('button', {
+              key: 'rename',
+              type: 'button',
+              className: 'tb-subtask-act',
+              title: t('projectEdit'),
+              onClick: () => setSubtaskEdit({ owner, ownerId, subtaskId: sub.id, title: sub.title }),
+            }, '✎'),
+            h('button', {
+              key: 'del',
+              type: 'button',
+              className: 'tb-subtask-act',
+              title: t('dailyDelete'),
+              onClick: () => removeSubtask(owner, ownerId, sub.id),
+            }, '✕'),
+          ])
+        })
+        const adding = subtaskDraft !== null && subtaskDraft.owner === owner && subtaskDraft.ownerId === ownerId
+        if (adding) {
+          rows.push(h('div', { key: '__add', className: 'tb-subtask tb-subtask-add' }, [
+            h('span', { key: 'mark', className: 'tb-subtask-mark', 'aria-hidden': 'true' }, '+'),
+            h('input', {
+              key: 'input',
+              className: 'tb-input tb-subtask-input',
+              autoFocus: true,
+              placeholder: t('newSubtaskPlaceholder'),
+              value: subtaskDraft.title,
+              onChange: (event) => setSubtaskDraft({ ...subtaskDraft, title: event.target.value }),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') {
+                  addSubtask(owner, ownerId, subtaskDraft.title)
+                  setSubtaskDraft({ owner, ownerId, title: '' })
+                } else if (event.key === 'Escape') {
+                  setSubtaskDraft(null)
+                }
+              },
+              onBlur: () => setSubtaskDraft(null),
+            }),
+          ]))
+        }
+        return rows
+      }
+      const subtaskAddButton = (owner, ownerId) => h('button', {
+        key: 'addsub',
+        type: 'button',
+        className: 'tb-subtask-addbtn',
+        title: t('addSubtask'),
+        'aria-label': t('addSubtask'),
+        onPointerDown: (event) => event.stopPropagation(),
+        onClick: (event) => {
+          event.stopPropagation()
+          setSubtaskEdit(null)
+          setSubtaskDraft({ owner, ownerId, title: '' })
+        },
+      }, '+')
+
+      const taskBlocks = []
       for (const slot of slots) {
-        taskRows.push(h('div', {
+        const main = h('div', {
           key: `s-${slot.id}`,
           className: 'tb-daytask',
           'data-done': slot.done ? '1' : undefined,
@@ -2547,10 +2932,13 @@ window.__ModuleLoader__.load({
           taskDoneCheck(slot.done === true, () => toggleSlot(slot)),
           h('span', { key: 'time', className: 'tb-wtask-time' }, minutesText(slot.start)),
           h('span', { key: 'title', className: 'tb-wtask-title' }, slot.title),
-        ]))
+          subtaskAddButton('slot', slot.id),
+        ])
+        taskBlocks.push(h('div', { key: `s-${slot.id}-block`, className: 'tb-daytask-block' },
+          [main].concat(renderSubtasks('slot', slot.id, slot))))
       }
       for (const project of dayProjects) {
-        taskRows.push(h('div', {
+        const main = h('div', {
           key: `p-${project.id}`,
           className: 'tb-daytask',
           'data-done': project.done ? '1' : undefined,
@@ -2559,7 +2947,10 @@ window.__ModuleLoader__.load({
           taskDoneCheck(project.done === true, () => update((store) => toggleProjectDone(store, project.id))),
           h('span', { key: 'dot', className: 'tb-wdot', style: { background: project.color } }),
           h('span', { key: 'title', className: 'tb-wtask-title' }, project.title),
-        ]))
+          subtaskAddButton('project', project.id),
+        ])
+        taskBlocks.push(h('div', { key: `p-${project.id}-block`, className: 'tb-daytask-block' },
+          [main].concat(renderSubtasks('project', project.id, project))))
       }
 
       return h(React.Fragment, null, [
@@ -2600,9 +2991,9 @@ window.__ModuleLoader__.load({
             ]),
             h('div', { key: 'tasks', className: 'tb-dailypanel' }, [
               h('div', { key: 'title', className: 'tb-panel-title' }, t('dayTasks')),
-              taskRows.length === 0
+              taskBlocks.length === 0
                 ? h('div', { key: 'empty', className: 'tb-empty' }, t('noDayTasks'))
-                : h('div', { key: 'list', className: 'tb-daytask-list' }, taskRows),
+                : h('div', { key: 'list', className: 'tb-daytask-list' }, taskBlocks),
             ]),
           ]),
           h('div', { key: 'timeline', style: { flex: '1 1 320px', minWidth: 0 } }, [
@@ -2732,6 +3123,7 @@ window.__ModuleLoader__.load({
             endTime: slot.end >= 1440 ? '23:59' : minutesText(slot.end),
             color: slot.color,
             done: slot.done === true,
+            subtasks: Array.isArray(slot.subtasks) ? slot.subtasks.map((sub) => ({ ...sub })) : [],
           },
         })
       }
@@ -2753,6 +3145,7 @@ window.__ModuleLoader__.load({
             end: form.end,
             note: form.note,
             done: false,
+            subtasks: [],
           }))
           store.showFlash(t('saved'))
         }
@@ -2791,6 +3184,7 @@ window.__ModuleLoader__.load({
               end: form.end,
               color: form.color,
               done: false,
+              subtasks: [],
             })
           }
           const origin = dialog.value.originDate
@@ -2803,6 +3197,7 @@ window.__ModuleLoader__.load({
             end: form.end,
             color: form.color,
             done: dialog.value.done === true,
+            subtasks: Array.isArray(dialog.value.subtasks) ? dialog.value.subtasks : [],
           })
           return next
         })
@@ -2822,8 +3217,12 @@ window.__ModuleLoader__.load({
           end,
           color: PALETTE[1],
           done: false,
+          subtasks: [],
         }))
       }
+      const extractedSubtasks = (item) => (Array.isArray(item.subtasks)
+        ? item.subtasks.map((sub) => ({ id: uid('st'), title: sub.title, done: sub.done === true }))
+        : [])
       const applyExtracted = (items) => {
         store.update((data) => {
           let next = data
@@ -2839,6 +3238,7 @@ window.__ModuleLoader__.load({
                 end: item.endDate,
                 note: typeof item.note === 'string' ? item.note.slice(0, 500) : '',
                 done: false,
+                subtasks: extractedSubtasks(item),
               })
             } else if (item.kind === 'daily') {
               next = withDailyTask(next, title)
@@ -2853,6 +3253,7 @@ window.__ModuleLoader__.load({
                 end,
                 color: isColor(item.color) ? item.color : PALETTE[1],
                 done: false,
+                subtasks: extractedSubtasks(item),
               })
             }
           }
@@ -2960,6 +3361,7 @@ window.__ModuleLoader__.load({
             setWorkView('day')
           },
           onEditProject: openEditProject,
+          onEditSlot: openEditSlot,
           showToast: store.showFlash,
         }),
         h(DailySection, {
@@ -3093,6 +3495,6 @@ window.__ModuleLoader__.load({
       }, TaskBoardBoundary))
     }
 
-    return { name: 'dsh-task-board', inject, apply }
+    return { name: '@local/dsh-task-board', inject, apply }
   },
 })

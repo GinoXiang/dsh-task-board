@@ -31,6 +31,7 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024
 const MAX_TITLE_CHARS = 200
 const MAX_NOTE_CHARS = 500
 const MAX_EXTRACTED_TASKS = 20
+const MAX_EXTRACTED_SUBTASKS = 50
 const MAX_EXTRACT_INPUT_CHARS = 4000
 
 // Defensive bounds for hostile or corrupt storage files. They are far beyond a
@@ -42,10 +43,13 @@ const MAX_DONE_DATES = 3660
 const MAX_PLAN_DAYS = 3660
 const MAX_PLAN_ENTRIES_PER_DAY = 500
 
-/** Abort the model stream after 25 s, and hard-settle the route a little later. */
-const AI_TIMEOUT_MS = 25000
-const AI_HARD_TIMEOUT_MS = 28000
-const AI_MAX_TOKENS = 1200
+/** Abort the model stream after 40 s, and hard-settle the route a little later.
+ *  A structured outline can make reasoning models spend most of a small token
+ *  budget before the answer starts, so the old 25 s / 1200-token limits turned
+ *  valid inputs into "empty reply" fallbacks. */
+const AI_TIMEOUT_MS = 40000
+const AI_HARD_TIMEOUT_MS = 45000
+const AI_MAX_TOKENS = 4000
 
 /** Colors offered to the model and used by the local fallback parser. */
 const COLOR_PALETTE = Object.freeze([
@@ -218,6 +222,25 @@ function emptyStore() {
   return { version: STORE_VERSION, projects: [], dailyTasks: [], dayPlans: {} }
 }
 
+/** Canonicalize one task's subtasks; accepts strings or {title, done} objects. */
+function sanitizeSubtasks(raw) {
+  if (!Array.isArray(raw)) return []
+  const items = []
+  for (const entry of raw) {
+    if (items.length >= MAX_EXTRACTED_SUBTASKS) break
+    if (typeof entry === 'string') {
+      const title = cleanTitle(entry)
+      if (title !== '') items.push({ id: sanitizeId(null, 'st'), title, done: false })
+      continue
+    }
+    if (!isPlainObject(entry)) continue
+    const title = cleanTitle(entry.title)
+    if (title === '') continue
+    items.push({ id: sanitizeId(entry.id, 'st'), title, done: entry.done === true })
+  }
+  return items
+}
+
 function sanitizeProject(raw) {
   if (!isPlainObject(raw)) return null
   const title = cleanTitle(raw.title)
@@ -239,6 +262,7 @@ function sanitizeProject(raw) {
     end: to,
     note: cleanNote(raw.note),
     done: raw.done === true,
+    subtasks: sanitizeSubtasks(raw.subtasks),
   }
 }
 
@@ -275,6 +299,7 @@ function sanitizePlanEntry(raw) {
     end,
     color: normalizeColor(raw.color),
     done: Boolean(raw.done),
+    subtasks: sanitizeSubtasks(raw.subtasks),
   }
 }
 
@@ -548,11 +573,21 @@ const EXTRACT_SYSTEM_PROMPT = [
   '数组元素字段（不适用或未知的字段一律写 null）：',
   '{"kind":"project"|"daily"|"slot","title":string,"startDate":"YYYY-MM-DD"|null,"endDate":"YYYY-MM-DD"|null,"date":"YYYY-MM-DD"|null,"startTime":"HH:mm"|null,"endTime":"HH:mm"|null,"color":"#RRGGBB"|null,"note":string|null}',
   '规则：',
-  '- project：长期项目或多日任务，必须给出 startDate 与 endDate（end >= start）。',
-  '- daily：每天重复的日常任务（文本中出现“每天/每日/天天”等），所有日期与时间字段为 null。',
+  '- 任务类别必须按以下顺序判定，命中即停：',
+  '  1) 出现“每天/每日/天天”等重复线索 → daily，所有日期与时间字段为 null。',
+  '  2) 出现明确的起止日期或日期范围（如“10月12日到10月23日”“下周一至周五”“10月20日—25日”）→ project，startDate/endDate 为该范围。',
+  '  3) 出现开始与结束钟点（如“14:00-15:30”“下午3点到4点”）→ slot，date 取文中日期，没有就用 today。',
+  '  4) 只出现一个日期、没有钟点 → project，startDate=endDate=该日期（当天任务）。',
+  '  5) 完全没有日期、时间或“每天”线索 → project，startDate=endDate=today（当天任务）；不要丢弃，也不要输出空数组。',
+  '- project：必须给出 startDate 与 endDate（end >= start）；单日任务用 startDate=endDate。',
+  '- daily：每天重复的日常任务。',
   '- slot：某一天的定时安排，必须给出 date、startTime、endTime（start < end）。',
   '- title 用简洁中文，去掉日期、时间与连接词，最多 200 字，不能为空。',
   '- 以用户消息中给出的 today（YYYY-MM-DD）为基准解析相对日期：今天/明天/后天、星期X、下周一、本月底、下周等；文中已带年份的日期保持不变。',
+  '- 如果输入是一份缩进清单（第一行常是“周一 / 明天 / 10月20日”这类日期标题，后面是缩进或带 - / 序号 的条目）：先解析标题里的日期，再把清单中每条**顶层**子项各自生成一个 project（startDate=endDate=该日期）；父级链路写入 note；标题行本身不生成任务。',
+  '- 缩进的行是“上一条任务”的子任务：不要为它单独生成任务，把它放进上一条任务（或最近的上级任务）的 subtasks 数组（元素 {"title":string,"done":boolean}），保持原始顺序；最多 50 条。没有子任务时 subtasks 为 null。',
+  '- 清单里没有日期标题也没有具体日期时，用 today 作为这些任务的日期。',
+  '- 不要漏掉清单里的任何一条子项；清单内任务保持输入顺序。',
   `- color 只能从调色板中选择：${COLOR_PALETTE.join(' ')}；不确定时用 null。`,
   `- 最多输出 ${MAX_EXTRACTED_TASKS} 个任务；若文本中没有任何任务，输出 []。`,
 ].join('\n')
@@ -562,7 +597,7 @@ function buildExtractUserText(text, today) {
 }
 
 /**
- * Consume one model stream, collecting text deltas. The soft 25 s timer aborts
+ * Consume one model stream, collecting text deltas. The soft 40 s timer aborts
  * the call; the hard timer settles the promise even if the provider ignores the
  * abort, so the route always answers.
  */
@@ -571,6 +606,7 @@ function collectModelReply(llm, request) {
     const controller = new AbortController()
     let settled = false
     let text = ''
+    let finishKind = null
     let softTimer
     let hardTimer
     const settle = (error, value) => {
@@ -606,9 +642,13 @@ function collectModelReply(llm, request) {
             if (kind === 'error' || kind === 'aborted') {
               throw new Error(`model stream finished with ${String(kind)}`)
             }
+            finishKind = kind
           }
         }
-        if (text.trim() === '') throw new Error('model returned no text')
+        if (finishKind === 'max-tokens') {
+          throw new Error('模型输出达到 token 上限被截断，请重试或把输入拆短')
+        }
+        if (text.trim() === '') throw new Error('模型返回了空内容')
         settle(null, text)
       } catch (error) {
         settle(new Error(`AI 提取失败：${describeError(error)}`))
@@ -679,6 +719,26 @@ function normalizeKind(value) {
   return null
 }
 
+/** Canonicalize the model-supplied subtask list; null when there is none. */
+function normalizeExtractedSubtasks(raw) {
+  if (!Array.isArray(raw)) return null
+  const items = []
+  for (const entry of raw) {
+    if (items.length >= MAX_EXTRACTED_SUBTASKS) break
+    let title = ''
+    let done = false
+    if (typeof entry === 'string') {
+      title = cleanTitle(entry)
+    } else if (isPlainObject(entry)) {
+      title = cleanTitle(entry.title)
+      done = entry.done === true
+    }
+    if (title === '') continue
+    items.push({ title, done })
+  }
+  return items.length > 0 ? items : null
+}
+
 /**
  * Validate and canonicalize one extracted task. Returns null when the entry
  * cannot satisfy its kind's required fields.
@@ -690,6 +750,7 @@ function normalizeExtractedTask(raw) {
   const color = normalizeColor(raw.color)
   const noteText = cleanNote(raw.note)
   const note = noteText === '' ? null : noteText
+  const subtasks = normalizeExtractedSubtasks(raw.subtasks)
   const startDate = normalizeDateText(raw.startDate)
   const endDate = normalizeDateText(raw.endDate)
   const date = normalizeDateText(raw.date)
@@ -719,6 +780,7 @@ function normalizeExtractedTask(raw) {
       endTime: null,
       color,
       note,
+      subtasks,
     }
   }
   if (kind === 'daily') {
@@ -732,6 +794,7 @@ function normalizeExtractedTask(raw) {
       endTime: null,
       color,
       note,
+      subtasks,
     }
   }
   if (date === null || startTime === null || endTime === null) return null
@@ -746,6 +809,7 @@ function normalizeExtractedTask(raw) {
     endTime,
     color,
     note,
+    subtasks,
   }
 }
 
@@ -1138,13 +1202,88 @@ function heuristicTask(kind, title, fields) {
     endTime: null,
     color: null,
     note: null,
+    subtasks: null,
     ...fields,
   }
+}
+
+/**
+ * Outline fallback: an indented or bulleted list under a date/weekday heading
+ * (the common "周一 + 缩进子项" paste) becomes one one-day project per content
+ * line, with the parent chain kept in `note` and a checkbox marker treated as
+ * completed. Returns [] when the text is not outline-shaped.
+ */
+function heuristicOutlineExtract(text, today) {
+  const rawLines = String(text === undefined || text === null ? '' : text).split(/\r?\n/)
+  const lines = []
+  let hasIndent = false
+  let hasBullet = false
+  for (const raw of rawLines) {
+    if (/^[\t ]+\S/.test(raw)) hasIndent = true
+    if (/^\s*(?:[-*•·]|\d+[.、)）])\s+\S/.test(raw)) hasBullet = true
+    const indent = (raw.match(/^[\t ]*/) || [''])[0].replace(/\t/g, '    ').length
+    let content = raw.trim()
+    if (content === '') continue
+    const checked = /^(?:\[[xX]\]|☑|✅|✓)/.test(content)
+    content = content
+      .replace(/^\d+[.、)）]\s*/, '')
+      .replace(/^[-*•·]\s+/, '')
+      .replace(/^(?:\[[ xX]\]\s*|☐\s*|☑\s*|✅\s*|✓\s*)/, '')
+      .trim()
+    if (content === '') continue
+    lines.push({ content, indent, checked })
+  }
+  if (lines.length < 2) return []
+
+  // A line that is only a date/weekday resolves the list's base date.
+  let baseDate = null
+  let startIndex = 0
+  for (let index = 0; index < Math.min(lines.length, 3); index += 1) {
+    const tokens = scanDateTokens(lines[index].content)
+    if (tokens.length === 0) continue
+    const rest = cleanHeuristicTitle(lines[index].content, tokens, scanClockTokens(lines[index].content))
+    if (rest !== '') continue
+    const resolved = resolveDateTokens(tokens, today)
+    if (resolved.length === 0) continue
+    baseDate = resolved[0].date
+    startIndex = index + 1
+    break
+  }
+  if (baseDate === null && !hasIndent && !hasBullet) return []
+
+  const tasks = []
+  let current = null
+  let baseIndent = null
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (baseIndent === null) baseIndent = line.indent
+    const ownTokens = scanDateTokens(line.content)
+    const ownResolved = resolveDateTokens(ownTokens, today)
+    const day = ownResolved.length > 0 ? ownResolved[0].date : (baseDate === null ? today : baseDate)
+    // Indented lines are subtasks of the current top-level task; their order is
+    // the input order and is never reorderable.
+    if (line.indent > baseIndent && current !== null) {
+      const subtasks = current.subtasks === null ? [] : current.subtasks
+      subtasks.push({ title: line.content.slice(0, MAX_TITLE_CHARS), done: line.checked })
+      current.subtasks = subtasks
+      continue
+    }
+    current = heuristicTask('project', line.content.slice(0, MAX_TITLE_CHARS), {
+      startDate: formatDate(day),
+      endDate: formatDate(day),
+      subtasks: null,
+    })
+    tasks.push(current)
+    if (tasks.length >= MAX_EXTRACTED_TASKS) break
+  }
+  return tasks
 }
 
 /** Deterministic extraction for Chinese task text; never throws. */
 function heuristicExtract(text, todayText) {
   const today = toDateFromNormalized(todayText)
+  const outline = heuristicOutlineExtract(text, today)
+  if (outline.length > 0) return colorizeHeuristicTasks(outline)
   const tasks = []
   for (const segment of segmentText(text)) {
     if (tasks.length >= MAX_EXTRACTED_TASKS) break
@@ -1211,8 +1350,23 @@ function heuristicExtract(text, todayText) {
         startDate: day,
         endDate: day,
       }))
+      continue
+    }
+
+    // No date, no clock, no daily cue: a plain task belongs to today, per the
+    // "anything without an explicit deadline is a task for today" rule.
+    if (title !== '') {
+      tasks.push(heuristicTask('project', title, {
+        startDate: formatDate(today),
+        endDate: formatDate(today),
+      }))
     }
   }
+  return colorizeHeuristicTasks(tasks)
+}
+
+/** Give fallback tasks the same palette the model is offered. */
+function colorizeHeuristicTasks(tasks) {
   return tasks.map((task, index) => {
     if (task.kind === 'daily' || task.color !== null) return task
     return { ...task, color: COLOR_PALETTE[index % COLOR_PALETTE.length] }
@@ -1221,25 +1375,28 @@ function heuristicExtract(text, todayText) {
 
 /** Full extraction pipeline: model first, deterministic fallback always available. */
 async function extractTasks(ctx, text, today) {
+  let aiFailure = null
   try {
     const tasks = await extractWithAi(ctx, text, today)
     return { source: 'ai', tasks, warning: null }
   } catch (error) {
-    ctx.logger?.warn?.('dsh-task-board: AI extraction unavailable: %s', describeError(error))
+    aiFailure = describeError(error).slice(0, 160)
+    ctx.logger?.warn?.('dsh-task-board: AI extraction unavailable: %s', aiFailure)
   }
   try {
     const tasks = heuristicExtract(text, today)
+    const reason = aiFailure === null ? '' : `（AI 失败原因：${aiFailure}）`
     if (tasks.length > 0) {
       return {
         source: 'fallback',
         tasks,
-        warning: 'AI 提取暂不可用，已按本地规则识别任务，请核对后保存。',
+        warning: `AI 提取暂不可用${reason}，已按本地规则识别任务，请核对后保存。`,
       }
     }
     return {
       source: 'fallback',
       tasks: [],
-      warning: '未能从文本中识别出任务；请补充日期、时间或“每天”等线索。',
+      warning: `未能从文本中识别出任务${reason}；请补充日期、时间或“每天”等线索。`,
     }
   } catch (error) {
     ctx.logger?.warn?.('dsh-task-board: heuristic extraction failed: %s', describeError(error))

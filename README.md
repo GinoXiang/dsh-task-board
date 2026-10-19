@@ -15,12 +15,13 @@ DSH Web GUI 的个人任务管理面板：双月日历、日常清单、每天�
 
 ## 功能
 
-- **双月日历**：连续两个月网格；每个长期任务按起止日期画成一条彩色时间条。跨周自动分段，每周行默认最多 5 条、超出可展开；双击线条进入拖动模式（拖线身移动日期、拖两端改长度）；已度过的日期段用浅灰雾面 + 细斜纹 + 白色毛玻璃描边标出。
+- **双月日历**：连续两个月网格；每个长期任务按起止日期画成一条彩色时间条，当天的定时任务也会作为单日条画在对应日期上（长期任务优先排布，每周最多显示 5 行，点「还有 N 项」可展开显示全部；日常任务不显示在日历上）。跨周自动分段；双击长期任务线条进入拖动模式（拖线身移动日期、拖两端改长度）；已度过的日期段用浅灰雾面 + 细斜纹 + 白色毛玻璃描边标出；单击任一条线可查看该任务的子任务。
 - **日常任务**：每天重复的习惯清单，圆角方块勾选框（完成时绿色实心 + 白色对勾）；可增删改。
 - **每天工作**：按钮切换两种视图。
   - **任务列表**：周一至周日 7 个竖列，左右翻页切换周；已过去日期背景为 `#E5ECFD`；只列非日常任务（定时任务与跨天长期任务），每行带完成勾选框。
   - **具体当天**：左侧「当天日常」与「当天任务」两个清单，右侧 24 小时纵向时间轴；方块可拖动移动、拖上下边缘改起止（15 分钟吸附），双击时间轴空白处快速新建；点方块可编辑。
 - **AI 提取**：页面顶部输入一段中文安排（例如「下周一至周五完成季度报告；每天锻炼 30 分钟；今天 14:00-15:30 开例会」），点击提取后调用当前默认模型解析为可编辑的任务草案，确认后写入日历 / 日常清单 / 当天安排。模型不可用、超时或返回格式异常时自动降级为本地规则解析，并给出提示。
+- **子任务**：长期任务和当天定时任务都可以带**有序子任务**；AI 提取时缩进行会自动归到上一行任务名下。选中日历上的任务可查看其子任务，周视图显示子任务数量；子任务只能在「具体当天」页增删改，顺序固定、不支持拖动重排。
 - **持久化**：改动自动保存到 `<DSH_HOME>/task-board/data.json`；写入前做字段校验与原子重命名，读取失败时暂停自动保存以免覆盖原文件。
 
 ## 安装
@@ -70,10 +71,11 @@ A personal task board for the DSH Web GUI: a two-month calendar, a daily checkli
 
 ## Features
 
-- **Two-month calendar** — every long-term task is drawn as a colored timeline bar across its date range; bars are split per week, each week row shows up to five lanes with an expand button, and double-clicking a bar enters drag mode (move the body, drag either end to resize). Days before today are rendered as a hazy gray band with fine diagonal hatching and a white glass-like outline.
+- **Two-month calendar** — every long-term task is drawn as a colored timeline bar across its date range, and a timed day task is drawn as a single-day bar on its date (long-term tasks pack first, five lanes per week row with an expand button to show every task; recurring daily tasks are not drawn on the calendar). Bars are split per week, double-clicking a long-term bar enters drag mode (move the body, drag either end to resize), and days before today are rendered as a hazy gray band with fine diagonal hatching and a white glass-like outline. Selecting any bar shows that task's subtasks.
 - **Daily tasks** — recurring daily habits in a rounded-square checkbox list (green filled with a white check when done); add, rename and delete.
 - **Daily work, two views** — a seven-column week list (Monday to Sunday, page between weeks, past days tinted `#E5ECFD`, completion checkboxes for timed tasks and long-term projects) and a specific-day view with the day's daily tasks, the day's tasks, and a 24-hour timeline whose blocks move by dragging and resize by dragging their edges (15-minute snapping, double-click empty space to add).
 - **AI extraction** — paste a Chinese schedule into the top bar, click extract, review the editable task drafts, then confirm to write them into the calendar, the daily checklist or a day plan. When the default model is unavailable, times out, or returns malformed output, a local rule-based parser takes over with a notice.
+- **Subtasks** — long-term tasks and timed day tasks can carry ordered subtasks; indented lines in an extracted outline become subtasks of the task above them. Selecting a task on the calendar shows its subtasks and the week view shows a subtask count; subtasks are added, renamed, checked and deleted only on the specific-day page, in their stored order (no drag reordering).
 - **Persistence** — autosave to `<DSH_HOME>/task-board/data.json` with validation and atomic writes; autosave pauses if the file cannot be read, so a corrupt file is never overwritten.
 
 ## Install
@@ -99,11 +101,11 @@ MIT
 
 ---
 
-## 感谢大肥鱼！MDGM！
+## 吉祥物 / Mascot
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/mascot-hungry.png" width="180" alt="吉祥物：我是吃白饭的大肥鱼" />
   <img src="https://raw.githubusercontent.com/GinoXiang/dsh-task-board/main/assets/mascot-punch.png" width="180" alt="吉祥物：杀鲸霸拳" />
 </p>
 
-> 感谢meme生产者们。
+> 仅供图一乐，与插件功能无关。/ Just for fun; not related to the plugin itself.
