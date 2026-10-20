@@ -146,6 +146,9 @@ window.__ModuleLoader__.load({
       newSubtaskPlaceholder: '输入子任务，回车添加',
       subtaskCount: (count) => `${count} 个子任务`,
       slotSelected: '已选当天任务：',
+      weekDragHint: '拖动任务可调整到其他日期',
+      movedTo: (day) => `已移动到 ${day}`,
+      projectDoneOnDay: (done) => (done ? '取消标记这一天' : '只标记这一天做过相关工作'),
     }
 
     const en = {
@@ -259,6 +262,9 @@ window.__ModuleLoader__.load({
       newSubtaskPlaceholder: 'Type a subtask, Enter to add',
       subtaskCount: (count) => `${count} subtask(s)`,
       slotSelected: 'Selected day task: ',
+      weekDragHint: 'Drag a task onto another day to reschedule it',
+      movedTo: (day) => `Moved to ${day}`,
+      projectDoneOnDay: (done) => (done ? 'Unmark this day' : 'Mark this day only'),
     }
 
     // --- styles ---------------------------------------------------------------
@@ -383,6 +389,10 @@ window.__ModuleLoader__.load({
       '.tb-wtask-time{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}',
       '.tb-wcol[data-past] .tb-wtask-time{color:#5A6472}',
       '.tb-wdot{flex:none;width:8px;height:8px;border-radius:50%}',
+      '.tb-wtask[data-draggable]{cursor:grab;touch-action:none;user-select:none}',
+      '.tb-wtask[data-draggable]:active{cursor:grabbing}',
+      '.tb-wcol[data-drag-over]{outline:2px dashed rgba(76,141,255,.75);outline-offset:-2px;background:rgba(76,141,255,.10)}',
+      '.tb-dragghost{position:fixed;z-index:9999;max-width:220px;padding:3px 9px;border-radius:8px;background:rgba(22,22,26,.88);color:#fff;font-size:12px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 6px 18px rgba(0,0,0,.28);pointer-events:none}',
       '.tb-wtask-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.tb-wempty{font-size:11px;color:var(--dsw-alias-label-tertiary)}',
       '.tb-dayview{display:flex;flex-direction:column;gap:10px;padding:12px 14px}',
@@ -678,6 +688,7 @@ window.__ModuleLoader__.load({
             end,
             note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : '',
             done: entry.done === true,
+            doneDates: Array.isArray(entry.doneDates) ? entry.doneDates.filter(isDateKey).slice(-3660) : [],
             subtasks: normalizeSubtasks(entry.subtasks),
           })
         }
@@ -767,12 +778,18 @@ window.__ModuleLoader__.load({
       return { ...store, projects: store.projects.map((project) => (project.id === id ? { ...project, ...patch } : project)) }
     }
 
-    function toggleProjectDone(store, id) {
+    function toggleProjectDoneOn(store, id, key) {
       return {
         ...store,
-        projects: store.projects.map((project) => (
-          project.id === id ? { ...project, done: project.done !== true } : project
-        )),
+        projects: store.projects.map((project) => {
+          if (project.id !== id) return project
+          const doneDates = Array.isArray(project.doneDates) ? project.doneDates : []
+          const has = doneDates.includes(key)
+          return {
+            ...project,
+            doneDates: has ? doneDates.filter((date) => date !== key) : doneDates.concat([key]).slice(-3660),
+          }
+        }),
       }
     }
 
@@ -2404,7 +2421,70 @@ window.__ModuleLoader__.load({
       const setWeekStart = props.setWeekStart
       const setSelectedDate = props.setSelectedDate
       const onOpenDay = props.onOpenDay
+      const showToast = props.showToast
       const end = addDays(weekStart, 6)
+
+      // Drag a task row onto another day column to reschedule it. Only timed day
+      // tasks and single-day projects are draggable; a multi-day project keeps
+      // its range and is edited from the calendar.
+      const [taskDrag, setTaskDrag] = React.useState(null)
+      const suppressClickRef = React.useRef(false)
+
+      const moveSlotTo = (fromKey, id, toKey) => {
+        if (fromKey === toKey) return
+        update((store) => {
+          const slot = slotsOn(store, fromKey).find((entry) => entry.id === id)
+          if (slot === undefined) return store
+          let next = withoutSlot(store, fromKey, id)
+          next = withSlot(next, toKey, {
+            ...slot,
+            subtasks: Array.isArray(slot.subtasks) ? slot.subtasks : [],
+          })
+          return next
+        })
+      }
+      const moveProjectTo = (id, toKey) => {
+        update((store) => patchProject(store, id, { start: toKey, end: toKey }))
+      }
+      const beginTaskDrag = (event, kind, fromKey, item) => {
+        if (typeof event.button === 'number' && event.button !== 0) return
+        if (event.target && event.target.closest && event.target.closest('button')) return
+        const startX = event.clientX
+        const startY = event.clientY
+        const pointerId = event.pointerId
+        let active = false
+        let target = null
+        const move = (moveEvent) => {
+          if (pointerId !== undefined && moveEvent.pointerId !== undefined && moveEvent.pointerId !== pointerId) return
+          if (!active && Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY) < 6) return
+          active = true
+          if (moveEvent.cancelable) moveEvent.preventDefault()
+          const node = typeof document !== 'undefined' ? document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) : null
+          const column = node && node.closest ? node.closest('[data-drop-day]') : null
+          const nextTarget = column ? column.getAttribute('data-drop-day') : null
+          target = nextTarget
+          setTaskDrag({ kind, title: item.title, x: moveEvent.clientX, y: moveEvent.clientY, target })
+          if (typeof document !== 'undefined' && document.body) document.body.style.cursor = 'grabbing'
+        }
+        const finish = (upEvent) => {
+          window.removeEventListener('pointermove', move)
+          window.removeEventListener('pointerup', finish)
+          window.removeEventListener('pointercancel', finish)
+          if (typeof document !== 'undefined' && document.body) document.body.style.cursor = ''
+          setTaskDrag(null)
+          if (!active) return
+          suppressClickRef.current = true
+          setTimeout(() => { suppressClickRef.current = false }, 300)
+          if (upEvent && upEvent.cancelable) upEvent.preventDefault()
+          if (target === null || target === fromKey) return
+          if (kind === 'slot') moveSlotTo(fromKey, item.id, target)
+          else moveProjectTo(item.id, target)
+          if (typeof showToast === 'function') showToast(t('movedTo', formatDay(target)))
+        }
+        window.addEventListener('pointermove', move)
+        window.addEventListener('pointerup', finish)
+        window.addEventListener('pointercancel', finish)
+      }
 
       const doneCheck = (checked, label, onToggle) => h('button', {
         key: 'check',
@@ -2432,7 +2512,15 @@ window.__ModuleLoader__.load({
             key: `s-${slot.id}`,
             className: 'tb-wtask',
             'data-done': slot.done ? '1' : undefined,
-            onClick: () => setSelectedDate(key),
+            'data-draggable': '1',
+            onClick: () => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false
+                return
+              }
+              setSelectedDate(key)
+            },
+            onPointerDown: (event) => beginTaskDrag(event, 'slot', key, slot),
           }, [
             doneCheck(slot.done === true, t('slotDone'), () => {
               update((store) => patchSlot(store, key, slot.id, { done: slot.done !== true }))
@@ -2445,14 +2533,25 @@ window.__ModuleLoader__.load({
           ]))
         }
         for (const project of projects) {
+          const projectDoneHere = Array.isArray(project.doneDates) && project.doneDates.includes(key)
           rows.push(h('div', {
             key: `p-${project.id}`,
             className: 'tb-wtask',
-            'data-done': project.done ? '1' : undefined,
-            onClick: () => setSelectedDate(key),
+            'data-done': projectDoneHere ? '1' : undefined,
+            'data-draggable': project.start === project.end ? '1' : undefined,
+            onClick: () => {
+              if (suppressClickRef.current) {
+                suppressClickRef.current = false
+                return
+              }
+              setSelectedDate(key)
+            },
+            onPointerDown: project.start === project.end
+              ? (event) => beginTaskDrag(event, 'project', key, project)
+              : undefined,
           }, [
-            doneCheck(project.done === true, t('slotDone'), () => {
-              update((store) => toggleProjectDone(store, project.id))
+            doneCheck(projectDoneHere, t('projectDoneOnDay', projectDoneHere), () => {
+              update((store) => toggleProjectDoneOn(store, project.id, key))
             }),
             h('span', { key: 'dot', className: 'tb-wdot', style: { background: project.color } }),
             h('span', { key: 'title', className: 'tb-wtask-title', title: `${project.title} · ${project.start} → ${project.end}` }, project.title),
@@ -2466,6 +2565,8 @@ window.__ModuleLoader__.load({
           className: 'tb-wcol',
           'data-past': isPast ? '1' : undefined,
           'data-today': isToday ? '1' : undefined,
+          'data-drop-day': key,
+          'data-drag-over': taskDrag !== null && taskDrag.target === key ? '1' : undefined,
         }, [
           h('button', {
             key: 'head',
@@ -2495,9 +2596,14 @@ window.__ModuleLoader__.load({
             h(IconBtn, { key: 'next', title: t('weekNext'), onClick: () => setWeekStart(addDays(weekStart, 7)) }, h(IconChevron, { dir: 'right' })),
             h(Btn, { key: 'today', variant: 'quiet', onClick: () => setWeekStart(startOfWeek(today)) }, t('today')),
           ]),
-          h('span', { key: 'hint', className: 'tb-hint' }, t('calendarHint')),
+          h('span', { key: 'hint', className: 'tb-hint' }, t('weekDragHint')),
         ]),
         h('div', { key: 'grid', className: 'tb-weekgrid' }, columns),
+        taskDrag === null ? null : h('div', {
+          key: 'dragghost',
+          className: 'tb-dragghost',
+          style: { left: `${taskDrag.x + 12}px`, top: `${taskDrag.y - 12}px` },
+        }, taskDrag.title),
       ])
     }
 
@@ -2784,13 +2890,13 @@ window.__ModuleLoader__.load({
       }
 
       const dayProjects = projectsOn(data, date)
-      const taskDoneCheck = (checked, onToggle) => h('button', {
+      const taskDoneCheck = (checked, onToggle, label) => h('button', {
         key: 'check',
         type: 'button',
         className: 'tb-checkbox tb-checkbox-sm',
         'data-checked': checked ? '1' : undefined,
-        title: t('slotDone'),
-        'aria-label': t('slotDone'),
+        title: label === undefined ? t('slotDone') : label,
+        'aria-label': label === undefined ? t('slotDone') : label,
         'aria-pressed': checked ? 'true' : 'false',
         onPointerDown: (event) => event.stopPropagation(),
         onClick: (event) => {
@@ -2938,13 +3044,18 @@ window.__ModuleLoader__.load({
           [main].concat(renderSubtasks('slot', slot.id, slot))))
       }
       for (const project of dayProjects) {
+        const projectDoneToday = Array.isArray(project.doneDates) && project.doneDates.includes(date)
         const main = h('div', {
           key: `p-${project.id}`,
           className: 'tb-daytask',
-          'data-done': project.done ? '1' : undefined,
+          'data-done': projectDoneToday ? '1' : undefined,
           title: `${project.title} · ${project.start} → ${project.end}`,
         }, [
-          taskDoneCheck(project.done === true, () => update((store) => toggleProjectDone(store, project.id))),
+          taskDoneCheck(
+            projectDoneToday,
+            () => update((store) => toggleProjectDoneOn(store, project.id, date)),
+            t('projectDoneOnDay', projectDoneToday),
+          ),
           h('span', { key: 'dot', className: 'tb-wdot', style: { background: project.color } }),
           h('span', { key: 'title', className: 'tb-wtask-title' }, project.title),
           subtaskAddButton('project', project.id),
@@ -3061,6 +3172,7 @@ window.__ModuleLoader__.load({
               props.setSelectedDate(key)
               setView('day')
             },
+            showToast: props.showToast,
           })
           : h(DayView, {
             key: 'day',
@@ -3145,6 +3257,7 @@ window.__ModuleLoader__.load({
             end: form.end,
             note: form.note,
             done: false,
+            doneDates: [],
             subtasks: [],
           }))
           store.showFlash(t('saved'))
@@ -3238,6 +3351,7 @@ window.__ModuleLoader__.load({
                 end: item.endDate,
                 note: typeof item.note === 'string' ? item.note.slice(0, 500) : '',
                 done: false,
+                doneDates: [],
                 subtasks: extractedSubtasks(item),
               })
             } else if (item.kind === 'daily') {

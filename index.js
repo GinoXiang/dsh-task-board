@@ -241,6 +241,23 @@ function sanitizeSubtasks(raw) {
   return items
 }
 
+/** Sorted, de-duplicated `YYYY-MM-DD` list, capped by MAX_DONE_DATES. */
+function sanitizeDoneDates(raw) {
+  const doneDates = []
+  const seen = new Set()
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      if (doneDates.length >= MAX_DONE_DATES) break
+      const date = normalizeDateText(value)
+      if (date === null || seen.has(date)) continue
+      seen.add(date)
+      doneDates.push(date)
+    }
+  }
+  doneDates.sort()
+  return doneDates
+}
+
 function sanitizeProject(raw) {
   if (!isPlainObject(raw)) return null
   const title = cleanTitle(raw.title)
@@ -262,6 +279,7 @@ function sanitizeProject(raw) {
     end: to,
     note: cleanNote(raw.note),
     done: raw.done === true,
+    doneDates: sanitizeDoneDates(raw.doneDates),
     subtasks: sanitizeSubtasks(raw.subtasks),
   }
 }
@@ -270,19 +288,7 @@ function sanitizeDailyTask(raw) {
   if (!isPlainObject(raw)) return null
   const title = cleanTitle(raw.title)
   if (title === '') return null
-  const doneDates = []
-  const seen = new Set()
-  if (Array.isArray(raw.doneDates)) {
-    for (const value of raw.doneDates) {
-      if (doneDates.length >= MAX_DONE_DATES) break
-      const date = normalizeDateText(value)
-      if (date === null || seen.has(date)) continue
-      seen.add(date)
-      doneDates.push(date)
-    }
-  }
-  doneDates.sort()
-  return { id: sanitizeId(raw.id, 'd'), title, doneDates }
+  return { id: sanitizeId(raw.id, 'd'), title, doneDates: sanitizeDoneDates(raw.doneDates) }
 }
 
 function sanitizePlanEntry(raw) {
